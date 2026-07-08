@@ -28,11 +28,8 @@ if (apiKey && apiKey !== "MY_GEMINI_API_KEY") {
   console.log("GEMINI_API_KEY not configured. Running AI Assistant in simulation/educational fallback mode.");
 }
 
-async function startServer() {
-  const app = express();
-  const PORT = 3000;
-
-  app.use(express.json({ limit: "5mb" }));
+const app = express();
+app.use(express.json({ limit: "5mb" }));
 
   // --- API Routes ---
 
@@ -348,13 +345,16 @@ Feel free to paste your actual Kotlin questions or ask how to setup offline retr
   });
 
   // --- Vite Middleware / Static Asset Configuration ---
-  if (process.env.NODE_ENV !== "production") {
-    const vite = await createViteServer({
+  if (process.env.NODE_ENV !== "production" && !process.env.VERCEL) {
+    createViteServer({
       server: { middlewareMode: true },
       appType: "spa",
+    }).then((vite) => {
+      app.use(vite.middlewares);
+    }).catch((err) => {
+      console.error("Failed to create Vite server:", err);
     });
-    app.use(vite.middlewares);
-  } else {
+  } else if (!process.env.VERCEL) {
     const distPath = path.join(process.cwd(), "dist");
     app.use(express.static(distPath));
     app.get("*", (req, res) => {
@@ -362,9 +362,11 @@ Feel free to paste your actual Kotlin questions or ask how to setup offline retr
     });
   }
 
-  app.listen(PORT, "0.0.0.0", () => {
-    console.log(`Server running on http://0.0.0.0:${PORT}`);
-  });
-}
+  const PORT = Number(process.env.PORT) || 3000;
+  if (!process.env.VERCEL) {
+    app.listen(PORT, "0.0.0.0", () => {
+      console.log(`Server running on http://0.0.0.0:${PORT}`);
+    });
+  }
 
-startServer();
+  export default app;
