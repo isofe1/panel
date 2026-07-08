@@ -85,6 +85,7 @@ export default function App() {
   // Quick background edit section states
   const [quickSelectName, setQuickSelectName] = useState<string>("");
   const [quickBgUrl, setQuickBgUrl] = useState<string>("");
+  const [quickImageError, setQuickImageError] = useState<boolean>(false);
 
   // Android preview simulator states
   const [selectedPreviewGenreId, setSelectedPreviewGenreId] = useState<string>("");
@@ -253,6 +254,10 @@ export default function App() {
   useEffect(() => {
     setImageError(false);
   }, [genreBgUrlInput]);
+
+  useEffect(() => {
+    setQuickImageError(false);
+  }, [quickBgUrl]);
 
   // Sync scroll on chat
   useEffect(() => {
@@ -795,22 +800,22 @@ export default function App() {
               </div>
 
               {/* Quick Background URL Updater Section */}
-              <div className={`p-4 border rounded-2xl transition-all duration-300 flex flex-col lg:flex-row items-center gap-4 shrink-0 shadow-sm ${
+              <div className={`p-4 border rounded-2xl transition-all duration-300 flex flex-col md:flex-row gap-5 shrink-0 shadow-sm ${
                 isDark ? "bg-[#0d1326] border-[#1e2942]" : "bg-white border-slate-200"
               }`}>
-                <div className="flex items-center gap-2 text-indigo-500 font-black text-xs uppercase tracking-wider shrink-0">
-                  <ImageIcon className="w-4.5 h-4.5 text-indigo-400" />
-                  Quick Backdrop Editor
-                </div>
+                {/* Left Side: Three Lines of Controls */}
+                <div className="flex-1 md:flex-[7] flex flex-col gap-3 w-full">
+                  <div className="flex items-center gap-2 text-indigo-500 font-black text-xs uppercase tracking-wider shrink-0 mb-1">
+                    <ImageIcon className="w-4.5 h-4.5 text-indigo-400" />
+                    Quick Backdrop Editor
+                  </div>
 
-                <div className="flex-1 flex flex-col md:flex-row items-center gap-4 w-full">
-                  {/* Select Category */}
-                  <div className="flex-1 flex items-center gap-2.5 w-full">
-                    <label className="text-[10px] font-black text-slate-400 uppercase tracking-wider shrink-0">Category</label>
+                  {/* First line: category menu (only dropdown menu) */}
+                  <div className="w-full">
                     <select
                       value={quickSelectName}
                       onChange={(e) => setQuickSelectName(e.target.value)}
-                      className={`flex-1 h-9 px-3 rounded-xl text-xs font-bold focus:outline-none focus:ring-2 focus:ring-indigo-500 transition-colors duration-300 border ${
+                      className={`w-full h-9 px-3 rounded-xl text-xs font-bold focus:outline-none focus:ring-2 focus:ring-indigo-500 transition-colors duration-300 border ${
                         isDark 
                           ? "bg-[#0a0f1d] border-[#1e2942] text-slate-200" 
                           : "bg-slate-50 border-slate-200 text-slate-700"
@@ -824,45 +829,89 @@ export default function App() {
                     </select>
                   </div>
 
-                  {/* Backdrop URL Input */}
-                  <div className="flex-[2] flex items-center gap-2.5 w-full">
-                    <label className="text-[10px] font-black text-slate-400 uppercase tracking-wider shrink-0">Backdrop URL</label>
+                  {/* Second line: bg url input (only input) */}
+                  <div className="w-full">
                     <input
                       type="text"
                       value={quickBgUrl}
                       onChange={(e) => setQuickBgUrl(e.target.value)}
                       placeholder="Paste image backdrop URL..."
-                      className={`flex-1 h-9 px-3 rounded-xl text-[11px] font-mono focus:outline-none focus:ring-2 focus:ring-indigo-500 transition-colors duration-300 border ${
+                      className={`w-full h-9 px-3 rounded-xl text-[11px] font-mono focus:outline-none focus:ring-2 focus:ring-indigo-500 transition-colors duration-300 border ${
                         isDark 
                           ? "bg-[#0a0f1d] border-[#1e2942] text-slate-300 placeholder-slate-600" 
                           : "bg-slate-50 border-slate-200 text-slate-600 placeholder-slate-400"
                       }`}
                     />
                   </div>
+
+                  {/* Third line: save button, reset button and clear button */}
+                  <div className="flex items-center gap-2.5 w-full">
+                    <button
+                      type="button"
+                      onClick={handleQuickSave}
+                      disabled={loading}
+                      className="h-9 px-4 bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-black tracking-wide rounded-xl transition-all shadow-md active:scale-[0.98] flex items-center justify-center gap-1.5 disabled:opacity-50"
+                    >
+                      {loading ? <RefreshCw className="w-3.5 h-3.5 animate-spin" /> : <Save className="w-3.5 h-3.5" />}
+                      Save URL
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={handleQuickReset}
+                      className={`h-9 px-4 rounded-xl text-xs font-black tracking-wide transition-all border active:scale-[0.98] ${
+                        isDark
+                          ? "bg-transparent border-slate-700 text-slate-300 hover:bg-slate-800"
+                          : "bg-white border-slate-200 text-slate-600 hover:bg-slate-50"
+                      }`}
+                    >
+                      Reset
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setQuickBgUrl("");
+                        addLog("Cleared backdrop URL input text", "info");
+                      }}
+                      className={`h-9 px-4 rounded-xl text-xs font-black tracking-wide transition-all border active:scale-[0.98] ${
+                        isDark
+                          ? "bg-transparent border-slate-700 text-red-400 hover:bg-red-500/10 hover:border-red-500/20"
+                          : "bg-white border-slate-200 text-red-500 hover:bg-red-50 hover:border-red-200"
+                      }`}
+                    >
+                      Clear
+                    </button>
+                  </div>
                 </div>
 
-                {/* Actions & Buttons */}
-                <div className="flex items-center gap-2 shrink-0 w-full lg:w-auto justify-end">
-                  <button
-                    type="button"
-                    onClick={handleQuickReset}
-                    className={`h-9 px-4 rounded-xl text-xs font-black tracking-wide transition-all border active:scale-[0.98] ${
-                      isDark
-                        ? "bg-transparent border-slate-700 text-slate-300 hover:bg-slate-800"
-                        : "bg-white border-slate-200 text-slate-600 hover:bg-slate-50"
-                    }`}
-                  >
-                    Reset
-                  </button>
-                  <button
-                    type="button"
-                    onClick={handleQuickSave}
-                    disabled={loading}
-                    className="h-9 px-4 bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-black tracking-wide rounded-xl transition-all shadow-md active:scale-[0.98] flex items-center justify-center gap-1.5 disabled:opacity-50"
-                  >
-                    {loading ? <RefreshCw className="w-3.5 h-3.5 animate-spin" /> : <Save className="w-3.5 h-3.5" />}
-                    Save URL
-                  </button>
+                {/* Right Side: Image Preview */}
+                <div className="flex-1 md:flex-[5] flex flex-col justify-center w-full min-h-[140px] md:min-h-[180px]">
+                  <div className={`relative h-full min-h-[140px] w-full rounded-xl overflow-hidden border flex items-center justify-center group transition-colors duration-300 p-1.5 ${
+                    isDark ? "border-[#1e2942] bg-[#0c1224]" : "border-slate-200 bg-slate-50"
+                  }`}>
+                    {quickBgUrl ? (
+                      !quickImageError ? (
+                        <img
+                          src={quickBgUrl}
+                          alt="Quick backdrop preview"
+                          className="max-w-full max-h-[160px] object-contain rounded-lg shadow-sm"
+                          referrerPolicy="no-referrer"
+                          onError={() => setQuickImageError(true)}
+                        />
+                      ) : (
+                        <div className="flex flex-col items-center gap-1.5 text-red-400">
+                          <AlertTriangle className="w-5 h-5 text-red-400" />
+                          <span className="text-[10px] font-bold">Invalid URL</span>
+                        </div>
+                      )
+                    ) : (
+                      <div className="flex flex-col items-center gap-1.5 text-slate-400">
+                        <ImageIcon className="w-5 h-5 text-indigo-400 opacity-60" />
+                        <span className="text-[10px] font-bold uppercase tracking-wider text-slate-500">No Image URL</span>
+                      </div>
+                    )}
+                  </div>
                 </div>
               </div>
 
@@ -1151,7 +1200,7 @@ export default function App() {
                               <img
                                 src={genreBgUrlInput}
                                 alt="Backdrop asset preview"
-                                className="w-full h-full object-contain rounded-lg shadow-md"
+                                className="max-w-full max-h-full object-contain rounded-lg shadow-md"
                                 referrerPolicy="no-referrer"
                                 onError={() => setImageError(true)}
                               />
