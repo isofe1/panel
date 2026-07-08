@@ -105,6 +105,78 @@ app.post("/api/login", (req, res) => {
   }
 });
 
+// Public endpoint to fetch genres (no-auth, bypasses CDN cache, used by external/mobile clients)
+app.get("/api/get-genres", async (req, res) => {
+  const owner = process.env.GITHUB_OWNER;
+  const repo = process.env.GITHUB_REPO;
+  const filePath = process.env.GITHUB_FILE_PATH || "genres.json";
+  const branch = process.env.GITHUB_BRANCH || "main";
+  const githubToken = process.env.GITHUB_TOKEN;
+
+  // Set headers to strictly disable caching
+  res.setHeader("Cache-Control", "no-store, no-cache, must-revalidate, proxy-revalidate");
+  res.setHeader("Pragma", "no-cache");
+  res.setHeader("Expires", "0");
+
+  const missing = [];
+  if (!owner) missing.push("GITHUB_OWNER");
+  if (!repo) missing.push("GITHUB_REPO");
+
+  // Local fallback if GitHub secrets are missing
+  if (missing.length > 0) {
+    try {
+      const localPath = path.join(process.cwd(), "genres.json");
+      if (fs.existsSync(localPath)) {
+        const fileContent = fs.readFileSync(localPath, "utf-8");
+        return res.json(JSON.parse(fileContent));
+      } else {
+        return res.json(DEFAULT_GENRES);
+      }
+    } catch (localErr: any) {
+      return res.status(500).json({ error: "Failed to load local fallback genres", details: String(localErr) });
+    }
+  }
+
+  try {
+    // Construct Raw GitHub content URL to fetch the freshest commits bypassing any intermediary CDN proxy
+    const rawUrl = `https://raw.githubusercontent.com/${owner}/${repo}/${branch}/${filePath}`;
+    const headers: Record<string, string> = {
+      "User-Agent": "Genres-Admin-Dashboard"
+    };
+    if (githubToken) {
+      headers["Authorization"] = `token ${githubToken}`;
+    }
+
+    const r = await fetch(rawUrl, { 
+      headers,
+      cache: "no-store" 
+    });
+
+    if (!r.ok) {
+      // If raw file doesn't exist yet but GitHub is configured, return local or default fallback
+      const localPath = path.join(process.cwd(), "genres.json");
+      if (fs.existsSync(localPath)) {
+        const fileContent = fs.readFileSync(localPath, "utf-8");
+        return res.json(JSON.parse(fileContent));
+      }
+      return res.json(DEFAULT_GENRES);
+    }
+
+    const json = await r.json();
+    return res.json(json);
+  } catch (err: any) {
+    // Ultimate fallback if fetch fails
+    try {
+      const localPath = path.join(process.cwd(), "genres.json");
+      if (fs.existsSync(localPath)) {
+        const fileContent = fs.readFileSync(localPath, "utf-8");
+        return res.json(JSON.parse(fileContent));
+      }
+    } catch (_) {}
+    return res.status(500).json({ error: "Failed to load genres", details: String(err) });
+  }
+});
+
 // 1. GitHub: Fetch file content from custom repo
 app.post("/api/github/fetch", verifyAdmin, async (req, res) => {
   const owner = process.env.GITHUB_OWNER;
