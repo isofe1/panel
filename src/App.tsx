@@ -886,8 +886,8 @@ export default function App() {
                 </div>
 
                 {/* Right Side: Image Preview */}
-                <div className="flex-1 md:flex-[5] flex flex-col justify-center w-full min-h-[140px] md:min-h-[180px]">
-                  <div className={`relative h-full min-h-[140px] w-full rounded-xl overflow-hidden border flex items-center justify-center group transition-colors duration-300 p-1.5 ${
+                <div className="flex-1 md:flex-[5] flex flex-col justify-center w-full">
+                  <div className={`relative h-36 md:h-44 w-full rounded-xl overflow-hidden border flex items-center justify-center group transition-colors duration-300 p-1.5 ${
                     isDark ? "border-[#1e2942] bg-[#0c1224]" : "border-slate-200 bg-slate-50"
                   }`}>
                     {quickBgUrl ? (
@@ -895,7 +895,7 @@ export default function App() {
                         <img
                           src={quickBgUrl}
                           alt="Quick backdrop preview"
-                          className="max-w-full max-h-[160px] object-contain rounded-lg shadow-sm"
+                          className="w-full h-full object-contain rounded-lg shadow-sm"
                           referrerPolicy="no-referrer"
                           onError={() => setQuickImageError(true)}
                         />
@@ -1200,7 +1200,7 @@ export default function App() {
                               <img
                                 src={genreBgUrlInput}
                                 alt="Backdrop asset preview"
-                                className="max-w-full max-h-full object-contain rounded-lg shadow-md"
+                                className="w-full h-full object-contain rounded-lg shadow-md"
                                 referrerPolicy="no-referrer"
                                 onError={() => setImageError(true)}
                               />
