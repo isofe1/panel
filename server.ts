@@ -7,8 +7,6 @@ import dotenv from "dotenv";
 
 dotenv.config();
 
-const SANDBOX_FILE_PATH = path.join(process.cwd(), "genres_sandbox.json");
-
 // Initialize Google Gen AI safely
 let ai: GoogleGenAI | null = null;
 const apiKey = process.env.GEMINI_API_KEY;
@@ -36,30 +34,6 @@ async function startServer() {
 
   app.use(express.json({ limit: "5mb" }));
 
-  // Helper to read sandbox file
-  const readSandboxData = () => {
-    try {
-      if (fs.existsSync(SANDBOX_FILE_PATH)) {
-        const raw = fs.readFileSync(SANDBOX_FILE_PATH, "utf-8");
-        return JSON.parse(raw);
-      }
-    } catch (e) {
-      console.error("Error reading sandbox file:", e);
-    }
-    return [];
-  };
-
-  // Helper to write sandbox file
-  const writeSandboxData = (data: any) => {
-    try {
-      fs.writeFileSync(SANDBOX_FILE_PATH, JSON.stringify(data, null, 2), "utf-8");
-      return true;
-    } catch (e) {
-      console.error("Error writing sandbox file:", e);
-      return false;
-    }
-  };
-
   // --- API Routes ---
 
   // Middleware to verify the admin password
@@ -83,36 +57,7 @@ async function startServer() {
     }
   });
 
-  // 1. Sandbox: Fetch genres
-  app.get("/api/genres/sandbox", verifyAdmin, (req, res) => {
-    const data = readSandboxData();
-    res.json({ success: true, data });
-  });
-
-  // 2. Sandbox: Update genre backdrop
-  app.post("/api/genres/sandbox", verifyAdmin, (req, res) => {
-    const { genre: genreName, backdrop } = req.body;
-    if (!genreName || !backdrop) {
-      return res.status(400).json({ success: false, error: "Missing required fields: genre, backdrop" });
-    }
-
-    const data = readSandboxData();
-    const index = data.findIndex((item: any) => item.genre === genreName);
-    if (index === -1) {
-      return res.status(404).json({ success: false, error: `Genre '${genreName}' not found in Sandbox.` });
-    }
-
-    data[index].backdrop = backdrop;
-    const success = writeSandboxData(data);
-
-    if (success) {
-      res.json({ success: true, data });
-    } else {
-      res.status(500).json({ success: false, error: "Failed to write to local sandbox file." });
-    }
-  });
-
-  // 3. GitHub: Fetch file content from custom repo
+  // 1. GitHub: Fetch file content from custom repo
   app.post("/api/github/fetch", verifyAdmin, async (req, res) => {
     const owner = process.env.GITHUB_OWNER;
     const repo = process.env.GITHUB_REPO;
@@ -183,7 +128,7 @@ async function startServer() {
     }
   });
 
-  // 4. GitHub: Commit update to custom repo (GET SHA -> Decode -> Update -> Encode -> PUT)
+  // 3. GitHub: Commit update to custom repo (GET SHA -> Decode -> Update -> Encode -> PUT)
   app.post("/api/github/update", verifyAdmin, async (req, res) => {
     const { genre: genreName, backdrop, commitMessage } = req.body;
 
@@ -238,7 +183,7 @@ async function startServer() {
       } else if (getResponse.status === 404) {
         // File doesn't exist yet, we will create a new one!
         console.log("File does not exist on GitHub. A new file will be created.");
-        existingGenres = readSandboxData(); // Bootstrap with sandbox data
+        existingGenres = []; 
       } else {
         const errText = await getResponse.text();
         return res.status(getResponse.status).json({
@@ -310,7 +255,7 @@ async function startServer() {
     }
   });
 
-  // 5. Gemini AI: Dynamic High-Thinking integration guidance assistant
+  // 4. Gemini AI: Dynamic High-Thinking integration guidance assistant
   app.post("/api/gemini/assist", verifyAdmin, async (req, res) => {
     const { prompt, chatHistory } = req.body;
 

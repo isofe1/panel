@@ -17,8 +17,6 @@ import {
   Copy, 
   Info,
   Layers,
-  Wifi,
-  WifiOff,
   User,
   ExternalLink,
   ChevronRight,
@@ -32,9 +30,6 @@ import { Genre, GitHubConfig, ChatMessage } from "./types";
 import { kotlinTemplates } from "./codeTemplates";
 
 export default function App() {
-  // Modes: "sandbox" | "github"
-  const [dataSourceMode, setDataSourceMode] = useState<"sandbox" | "github">("github");
-  
   // Security Authentication states
   const [isAuthenticated, setIsAuthenticated] = useState<boolean>(() => {
     return sessionStorage.getItem("admin_authenticated") === "true";
@@ -52,8 +47,6 @@ export default function App() {
   const [statusLogs, setStatusLogs] = useState<{ time: string; text: string; type: "info" | "success" | "error" }[]>([]);
   
   // Android preview simulator states
-  const [isAndroidOffline, setIsAndroidOffline] = useState<boolean>(false);
-  const [simulatedLoadError, setSimulatedLoadError] = useState<boolean>(false);
   const [selectedPreviewGenreId, setSelectedPreviewGenreId] = useState<string>("");
   
   // Code templates
@@ -79,57 +72,33 @@ export default function App() {
     setStatusLogs(prev => [{ time: now, text, type }, ...prev].slice(0, 50));
   };
 
-  // Load sandbox or github data
-  const loadData = async (mode: "sandbox" | "github" = dataSourceMode) => {
+  // Load production data
+  const loadData = async () => {
     setLoading(true);
-    if (mode === "sandbox") {
-      addLog("Initializing local sandboxed static database API...", "info");
-      try {
-        const response = await fetch("/api/genres/sandbox", {
-          headers: { "x-admin-password": adminPassword }
-        });
-        const json = await response.json();
-        if (json.success) {
-          setGenres(json.data);
-          if (json.data.length > 0) {
-            const defaultGenre = json.data.find((g: Genre) => g.genre.toLowerCase() === "romance") || json.data[0];
-            setSelectedGenreId(defaultGenre.genre);
-            setSelectedPreviewGenreId(defaultGenre.genre);
-            setBackdropInputUrl(defaultGenre.backdrop);
-          }
-          addLog(`Success: Loaded ${json.data.length} genres from sandbox file.`, "success");
-        } else {
-          addLog(`Failed to read sandbox content from server: ${json.error || "Unauthorized"}`, "error");
+    addLog("Connecting to secure GitHub Repository CDN on backend...", "info");
+    try {
+      const response = await fetch("/api/github/fetch", {
+        method: "POST",
+        headers: { 
+          "Content-Type": "application/json",
+          "x-admin-password": adminPassword
         }
-      } catch (err: any) {
-        addLog(`Network Error loading sandbox: ${err.message}`, "error");
-      }
-    } else {
-      addLog("Connecting to secure GitHub Repository CDN on backend...", "info");
-      try {
-        const response = await fetch("/api/github/fetch", {
-          method: "POST",
-          headers: { 
-            "Content-Type": "application/json",
-            "x-admin-password": adminPassword
-          }
-        });
-        const json = await response.json();
-        if (json.success) {
-          setGenres(json.data);
-          if (json.data.length > 0) {
-            const first = json.data[0];
-            setSelectedGenreId(first.genre);
-            setSelectedPreviewGenreId(first.genre);
-            setBackdropInputUrl(first.backdrop);
-          }
-          addLog(`Authenticated successfully! Fetched production data securely (SHA: ${json.sha ? json.sha.substring(0, 7) : "N/A"})`, "success");
-        } else {
-          addLog(`Fetch Error: ${json.error}`, "error");
+      });
+      const json = await response.json();
+      if (json.success) {
+        setGenres(json.data);
+        if (json.data.length > 0) {
+          const first = json.data[0];
+          setSelectedGenreId(first.genre);
+          setSelectedPreviewGenreId(first.genre);
+          setBackdropInputUrl(first.backdrop);
         }
-      } catch (err: any) {
-        addLog(`Connection failed: ${err.message}`, "error");
+        addLog(`Authenticated successfully! Fetched production data securely (SHA: ${json.sha ? json.sha.substring(0, 7) : "N/A"})`, "success");
+      } else {
+        addLog(`Fetch Error: ${json.error}`, "error");
       }
+    } catch (err: any) {
+      addLog(`Connection failed: ${err.message}`, "error");
     }
     setLoading(false);
   };
@@ -173,9 +142,9 @@ export default function App() {
   // Initialize/Reload data when authenticated
   useEffect(() => {
     if (isAuthenticated) {
-      loadData(dataSourceMode);
+      loadData();
     }
-  }, [isAuthenticated, dataSourceMode]);
+  }, [isAuthenticated]);
 
   // Sync scroll on chat
   useEffect(() => {
@@ -193,7 +162,7 @@ export default function App() {
     }
   };
 
-  // Save changes (sandbox or commit to github)
+  // Save changes (commit to github)
   const handleUpdate = async () => {
     if (!selectedGenreId || !backdropInputUrl) {
       addLog("Please select a genre and input a valid asset URL.", "error");
@@ -201,53 +170,30 @@ export default function App() {
     }
 
     setLoading(true);
-    if (dataSourceMode === "sandbox") {
-      addLog(`Updating local sandbox data for Genre '${selectedGenreId}'...`, "info");
-      try {
-        const response = await fetch("/api/genres/sandbox", {
-          method: "POST",
-          headers: { 
-            "Content-Type": "application/json",
-            "x-admin-password": adminPassword
-          },
-          body: JSON.stringify({ genre: selectedGenreId, backdrop: backdropInputUrl })
-        });
-        const json = await response.json();
-        if (json.success) {
-          setGenres(json.data);
-          addLog(`Updated successfully! Backdrop URL stored locally. Live Android simulator refreshed.`, "success");
-        } else {
-          addLog(`Failed to update sandbox: ${json.error}`, "error");
-        }
-      } catch (err: any) {
-        addLog(`Network error: ${err.message}`, "error");
+    addLog(`Initiating secure backend GitHub commit sequence...`, "info");
+    try {
+      const response = await fetch("/api/github/update", {
+        method: "POST",
+        headers: { 
+          "Content-Type": "application/json",
+          "x-admin-password": adminPassword
+        },
+        body: JSON.stringify({
+          genre: selectedGenreId,
+          backdrop: backdropInputUrl,
+          commitMessage: `Admin UI: Dynamic backdrop asset update for '${selectedGenreId}' genre`
+        })
+      });
+      const json = await response.json();
+      if (json.success) {
+        setGenres(json.data);
+        addLog(`Commit complete! SHA: ${json.commitSha ? json.commitSha.substring(0, 8) : "N/A"}`, "success");
+        addLog(`GitHub response: File successfully updated on CDN branch. Vercel webhook will redeploy.`, "success");
+      } else {
+        addLog(`GitHub Update Failed: ${json.error}`, "error");
       }
-    } else {
-      addLog(`Initiating secure backend GitHub commit sequence...`, "info");
-      try {
-        const response = await fetch("/api/github/update", {
-          method: "POST",
-          headers: { 
-            "Content-Type": "application/json",
-            "x-admin-password": adminPassword
-          },
-          body: JSON.stringify({
-            genre: selectedGenreId,
-            backdrop: backdropInputUrl,
-            commitMessage: `Admin UI: Dynamic backdrop asset update for '${selectedGenreId}' genre`
-          })
-        });
-        const json = await response.json();
-        if (json.success) {
-          setGenres(json.data);
-          addLog(`Commit complete! SHA: ${json.commitSha ? json.commitSha.substring(0, 8) : "N/A"}`, "success");
-          addLog(`GitHub response: File successfully updated on CDN branch. Vercel webhook will redeploy.`, "success");
-        } else {
-          addLog(`GitHub Update Failed: ${json.error}`, "error");
-        }
-      } catch (err: any) {
-        addLog(`Failed to deliver commit payload: ${err.message}`, "error");
-      }
+    } catch (err: any) {
+      addLog(`Failed to deliver commit payload: ${err.message}`, "error");
     }
     setLoading(false);
   };
@@ -446,48 +392,46 @@ export default function App() {
           </div>
 
           {/* GitHub configuration details */}
-          {dataSourceMode === "github" && (
-            <div className="flex flex-col gap-3 p-4 bg-slate-50 border border-slate-100 rounded-xl">
-              <div className="flex items-center gap-2 text-rose-600 font-bold text-xs uppercase">
-                <Github className="w-4 h-4" />
-                Production CDN Config
-              </div>
-              
-              <div className="text-[11px] text-slate-500 space-y-2">
-                <p>
-                  GitHub parameters are now <span className="font-semibold text-emerald-600">securely stored on the backend</span> to protect secrets.
-                </p>
-                <div className="border-t border-slate-200/60 pt-2 space-y-1 font-mono text-[10px]">
-                  <div className="flex justify-between">
-                    <span className="text-slate-400">Owner:</span>
-                    <span className="text-slate-700 font-bold">Configured</span>
-                  </div>
-                  <div className="flex justify-between">
-                    <span className="text-slate-400">Repository:</span>
-                    <span className="text-slate-700 font-bold">Configured</span>
-                  </div>
-                  <div className="flex justify-between">
-                    <span className="text-slate-400">File Path:</span>
-                    <span className="text-slate-700 font-bold">Configured</span>
-                  </div>
-                  <div className="flex justify-between">
-                    <span className="text-slate-400">Branch:</span>
-                    <span className="text-slate-700 font-bold">Configured</span>
-                  </div>
+          <div className="flex flex-col gap-3 p-4 bg-slate-50 border border-slate-100 rounded-xl">
+            <div className="flex items-center gap-2 text-rose-600 font-bold text-xs uppercase">
+              <Github className="w-4 h-4" />
+              Production CDN Config
+            </div>
+            
+            <div className="text-[11px] text-slate-500 space-y-2">
+              <p>
+                GitHub parameters are now <span className="font-semibold text-emerald-600">securely stored on the backend</span> to protect secrets.
+              </p>
+              <div className="border-t border-slate-200/60 pt-2 space-y-1 font-mono text-[10px]">
+                <div className="flex justify-between">
+                  <span className="text-slate-400">Owner:</span>
+                  <span className="text-slate-700 font-bold">Configured</span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-slate-400">Repository:</span>
+                  <span className="text-slate-700 font-bold">Configured</span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-slate-400">File Path:</span>
+                  <span className="text-slate-700 font-bold">Configured</span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-slate-400">Branch:</span>
+                  <span className="text-slate-700 font-bold">Configured</span>
                 </div>
               </div>
-
-              <button 
-                id="btn-fetch-github"
-                onClick={() => loadData("github")}
-                disabled={loading}
-                className="w-full mt-2 py-1.5 bg-rose-600 hover:bg-rose-700 text-white font-bold rounded-lg text-xs flex items-center justify-center gap-1.5 disabled:opacity-50 transition-colors"
-              >
-                <RefreshCw className={`w-3.5 h-3.5 ${loading ? "animate-spin" : ""}`} />
-                Reload Production Data
-              </button>
             </div>
-          )}
+
+            <button 
+              id="btn-fetch-github"
+              onClick={() => loadData()}
+              disabled={loading}
+              className="w-full mt-2 py-1.5 bg-rose-600 hover:bg-rose-700 text-white font-bold rounded-lg text-xs flex items-center justify-center gap-1.5 disabled:opacity-50 transition-colors"
+            >
+              <RefreshCw className={`w-3.5 h-3.5 ${loading ? "animate-spin" : ""}`} />
+              Reload Production Data
+            </button>
+          </div>
 
           {/* Metadata view info */}
           <div className="mt-auto">
@@ -520,25 +464,6 @@ export default function App() {
                   Managing static API <span className="font-mono font-semibold text-indigo-600">genres.json</span> served dynamically via Vercel Edge.
                 </p>
               </div>
-
-              {/* Data status loader banner */}
-              {genres.length === 0 && !loading && (
-                <div className="p-4 bg-amber-50 border border-amber-200 rounded-xl flex items-start gap-3">
-                  <AlertTriangle className="text-amber-600 w-5 h-5 shrink-0 mt-0.5" />
-                  <div>
-                    <h4 className="text-sm font-bold text-amber-900">No Genres Loaded</h4>
-                    <p className="text-xs text-amber-700 mt-1">
-                      Unable to pull static genres schema. Ensure your API endpoint contains valid array data. Let's load the Sandbox default to proceed!
-                    </p>
-                    <button 
-                      onClick={() => { setDataSourceMode("sandbox"); loadData("sandbox"); }}
-                      className="mt-2 px-3 py-1 bg-amber-600 hover:bg-amber-700 text-white font-bold rounded text-xs"
-                    >
-                      Reset to Local Sandbox
-                    </button>
-                  </div>
-                </div>
-              )}
 
               {/* Editing Card Form */}
               <div className="bg-white rounded-xl border border-slate-200 shadow-sm p-6 flex flex-col gap-4">
@@ -589,17 +514,8 @@ export default function App() {
                     disabled={loading}
                     className="flex-1 h-10 bg-indigo-600 hover:bg-indigo-700 text-white font-bold rounded-lg shadow-sm transition-all active:scale-[0.98] flex items-center justify-center gap-2 text-sm disabled:opacity-50"
                   >
-                    {dataSourceMode === "sandbox" ? (
-                      <>
-                        <Save className="w-4 h-4" />
-                        Update Sandbox File
-                      </>
-                    ) : (
-                      <>
-                        <Github className="w-4 h-4" />
-                        Commit to CDN repository
-                      </>
-                    )}
+                    <Github className="w-4 h-4" />
+                    Commit to CDN repository
                   </button>
                   <button 
                     id="btn-reset-input"
@@ -653,26 +569,6 @@ export default function App() {
             <section className="col-span-5 flex flex-col items-center justify-center shrink-0">
               <div className="flex items-center justify-between w-[290px] mb-2">
                 <span className="text-xs font-bold text-slate-400 uppercase tracking-wider">Live Android Simulator</span>
-                
-                {/* Simulated offline toggle */}
-                <button 
-                  id="toggle-offline-status"
-                  onClick={() => setIsAndroidOffline(!isAndroidOffline)}
-                  className={`flex items-center gap-1.5 px-2 py-1 rounded text-[10px] font-bold transition-all ${isAndroidOffline ? "bg-red-100 text-red-700 border border-red-200" : "bg-emerald-100 text-emerald-700 border border-emerald-200"}`}
-                  title="Toggle offline state to simulate network recovery models in Kotlin"
-                >
-                  {isAndroidOffline ? (
-                    <>
-                      <WifiOff className="w-3.5 h-3.5" />
-                      SIMULATE OFFLINE
-                    </>
-                  ) : (
-                    <>
-                      <Wifi className="w-3.5 h-3.5 animate-pulse" />
-                      SIMULATE ONLINE
-                    </>
-                  )}
-                </button>
               </div>
 
               {/* Phone Container */}
@@ -683,30 +579,7 @@ export default function App() {
                 {/* Mobile Screen Content */}
                 <div className="flex-1 bg-black relative flex flex-col overflow-hidden text-white pt-5">
                   
-                  {isAndroidOffline ? (
-                    /* Offline State screen inside Android */
-                    <div className="flex-1 flex flex-col items-center justify-center p-6 text-center bg-[#0d131f] h-full">
-                      <div className="w-12 h-12 rounded-full bg-red-950/50 border border-red-500/30 flex items-center justify-center mb-4">
-                        <WifiOff className="w-6 h-6 text-red-400" />
-                      </div>
-                      <h4 className="text-sm font-bold text-red-400">Connection Offline</h4>
-                      <p className="text-[11px] text-slate-400 mt-2">
-                        Unable to connect to dynamic static API CDN hosted on Vercel. Ktor / Retrofit IOException caught safely.
-                      </p>
-                      
-                      <button 
-                        onClick={() => { setIsAndroidOffline(false); addLog("Android app: Retrying connections via live network...", "info"); }}
-                        className="mt-5 px-4 py-1.5 bg-rose-600 hover:bg-rose-700 text-white font-bold rounded-lg text-xs tracking-wide transition-all"
-                      >
-                        Try Again (Retry)
-                      </button>
-
-                      <div className="mt-8 text-[9px] text-slate-500 border-t border-slate-800/80 pt-3 w-full">
-                        Showing fallback cache or last loaded dataset if cached by Coil.
-                      </div>
-                    </div>
-                  ) : (
-                    /* Online UI showing the actual lists/grid dynamically populated from Sandbox or GitHub */
+                    {/* Online UI showing the actual lists/grid dynamically populated from GitHub */}
                     <div className="flex-1 flex flex-col overflow-hidden relative">
                       {/* Genres Header text strictly matching the image */}
                       <div className="px-4 pt-3 pb-2 shrink-0 flex items-center justify-between bg-black z-10">
@@ -763,7 +636,6 @@ export default function App() {
                       </div>
 
                     </div>
-                  )}
                 </div>
               </div>
             </section>
