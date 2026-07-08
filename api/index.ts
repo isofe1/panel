@@ -67,6 +67,24 @@ app.post("/api/github/fetch", verifyAdmin, async (req, res) => {
   if (!githubToken) missing.push("GITHUB_TOKEN");
 
   if (missing.length > 0) {
+    try {
+      const localPath = path.join(process.cwd(), "genres.json");
+      if (fs.existsSync(localPath)) {
+        console.log("GitHub credentials missing. Falling back to local genres.json file.");
+        const fileContent = fs.readFileSync(localPath, "utf-8");
+        const parsedJson = JSON.parse(fileContent);
+        return res.json({
+          success: true,
+          sha: "",
+          isLocalFallback: true,
+          data: parsedJson,
+          message: "Loaded from local workspace file (GitHub secrets not fully configured)."
+        });
+      }
+    } catch (localErr: any) {
+      console.error("Local fallback reading failed:", localErr);
+    }
+
     return res.status(500).json({
       success: false,
       error: `Server is missing GitHub configuration variables: ${missing.join(", ")}. Please define them in Vercel/environment setup.`
@@ -147,6 +165,35 @@ app.post("/api/github/update", verifyAdmin, async (req, res) => {
   if (!githubToken) missing.push("GITHUB_TOKEN");
 
   if (missing.length > 0) {
+    try {
+      const localPath = path.join(process.cwd(), "genres.json");
+      if (fs.existsSync(localPath)) {
+        console.log("GitHub credentials missing. Attempting to write locally...");
+        const fileContent = fs.readFileSync(localPath, "utf-8");
+        const existingGenres = JSON.parse(fileContent);
+
+        const index = existingGenres.findIndex((g: any) => g.genre === genreName);
+        if (index === -1) {
+          return res.status(404).json({ 
+            success: false, 
+            error: `Genre '${genreName}' not found in the local file.` 
+          });
+        }
+
+        existingGenres[index].backdrop = backdrop;
+        fs.writeFileSync(localPath, JSON.stringify(existingGenres, null, 4), "utf-8");
+
+        return res.json({
+          success: true,
+          message: "Successfully updated local genres.json file (Development Mode).",
+          isLocalFallback: true,
+          data: existingGenres
+        });
+      }
+    } catch (localErr: any) {
+      console.error("Local fallback writing failed:", localErr);
+    }
+
     return res.status(500).json({
       success: false,
       error: `Server is missing GitHub configuration variables: ${missing.join(", ")}. Please define them in Vercel/environment setup.`
@@ -231,9 +278,15 @@ app.post("/api/github/update", verifyAdmin, async (req, res) => {
 
     if (!putResponse.ok) {
       const errText = await putResponse.text();
+      let customError = `GitHub PUT commit failed (${putResponse.status}): ${errText}`;
+      if (putResponse.status === 403 || errText.toLowerCase().includes("permission") || errText.toLowerCase().includes("accessible by personal access token")) {
+        customError = `GitHub Access Forbidden (403): Your Personal Access Token (PAT) lacks permissions to write to this repository. INSTRUCTIONS: Please go to your GitHub Settings -> Developer settings -> Personal access tokens -> click your token. Under "Repository permissions", find "Contents" and set it to "Read and write".`;
+      } else if (putResponse.status === 401) {
+        customError = `GitHub Unauthorized (401): The Personal Access Token (PAT) is invalid, incorrect, or expired.`;
+      }
       return res.status(putResponse.status).json({
         success: false,
-        error: `GitHub PUT commit failed (${putResponse.status}): ${errText}`
+        error: customError
       });
     }
 
