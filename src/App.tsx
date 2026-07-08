@@ -1,0 +1,777 @@
+import React, { useState, useEffect, useRef } from "react";
+import { 
+  Database, 
+  GitBranch, 
+  Github, 
+  Globe, 
+  RefreshCw, 
+  Save, 
+  Settings, 
+  AlertTriangle, 
+  CheckCircle, 
+  Image as ImageIcon, 
+  Smartphone, 
+  Code, 
+  Sparkles, 
+  Send, 
+  Copy, 
+  Info,
+  Layers,
+  Wifi,
+  WifiOff,
+  User,
+  ExternalLink,
+  ChevronRight,
+  Eye,
+  Settings2,
+  Home,
+  Search,
+  Grid
+} from "lucide-react";
+import { Genre, GitHubConfig, ChatMessage } from "./types";
+import { kotlinTemplates } from "./codeTemplates";
+
+export default function App() {
+  // Modes: "sandbox" | "github"
+  const [dataSourceMode, setDataSourceMode] = useState<"sandbox" | "github">("github");
+  
+  // Security Authentication states
+  const [isAuthenticated, setIsAuthenticated] = useState<boolean>(() => {
+    return sessionStorage.getItem("admin_authenticated") === "true";
+  });
+  const [adminPassword, setAdminPassword] = useState<string>(() => {
+    return sessionStorage.getItem("admin_password") || "";
+  });
+  const [loginError, setLoginError] = useState<string>("");
+
+  // Genres list state
+  const [genres, setGenres] = useState<Genre[]>([]);
+  const [selectedGenreId, setSelectedGenreId] = useState<string>("");
+  const [backdropInputUrl, setBackdropInputUrl] = useState<string>("");
+  const [loading, setLoading] = useState<boolean>(false);
+  const [statusLogs, setStatusLogs] = useState<{ time: string; text: string; type: "info" | "success" | "error" }[]>([]);
+  
+  // Android preview simulator states
+  const [isAndroidOffline, setIsAndroidOffline] = useState<boolean>(false);
+  const [simulatedLoadError, setSimulatedLoadError] = useState<boolean>(false);
+  const [selectedPreviewGenreId, setSelectedPreviewGenreId] = useState<string>("");
+  
+  // Code templates
+  const [selectedTemplateKey, setSelectedTemplateKey] = useState<string>("compose");
+  const [copiedKey, setCopiedKey] = useState<string>("");
+
+  // Gemini assistant states
+  const [chatInput, setChatInput] = useState<string>("");
+  const [chatMessages, setChatMessages] = useState<ChatMessage[]>([
+    {
+      id: "welcome",
+      role: "assistant",
+      content: "Hello! I am your Kotlin Native & Android integration assistant. Ask me anything about configuring Retrofit/Ktor, setting up Coil disk caching, or handling offline retry states in Jetpack Compose.",
+      timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+    }
+  ]);
+  const [aiLoading, setAiLoading] = useState<boolean>(false);
+  const chatEndRef = useRef<HTMLDivElement>(null);
+
+  // Helper to add logs
+  const addLog = (text: string, type: "info" | "success" | "error" = "info") => {
+    const now = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+    setStatusLogs(prev => [{ time: now, text, type }, ...prev].slice(0, 50));
+  };
+
+  // Load sandbox or github data
+  const loadData = async (mode: "sandbox" | "github" = dataSourceMode) => {
+    setLoading(true);
+    if (mode === "sandbox") {
+      addLog("Initializing local sandboxed static database API...", "info");
+      try {
+        const response = await fetch("/api/genres/sandbox", {
+          headers: { "x-admin-password": adminPassword }
+        });
+        const json = await response.json();
+        if (json.success) {
+          setGenres(json.data);
+          if (json.data.length > 0) {
+            const defaultGenre = json.data.find((g: Genre) => g.genre.toLowerCase() === "romance") || json.data[0];
+            setSelectedGenreId(defaultGenre.genre);
+            setSelectedPreviewGenreId(defaultGenre.genre);
+            setBackdropInputUrl(defaultGenre.backdrop);
+          }
+          addLog(`Success: Loaded ${json.data.length} genres from sandbox file.`, "success");
+        } else {
+          addLog(`Failed to read sandbox content from server: ${json.error || "Unauthorized"}`, "error");
+        }
+      } catch (err: any) {
+        addLog(`Network Error loading sandbox: ${err.message}`, "error");
+      }
+    } else {
+      addLog("Connecting to secure GitHub Repository CDN on backend...", "info");
+      try {
+        const response = await fetch("/api/github/fetch", {
+          method: "POST",
+          headers: { 
+            "Content-Type": "application/json",
+            "x-admin-password": adminPassword
+          }
+        });
+        const json = await response.json();
+        if (json.success) {
+          setGenres(json.data);
+          if (json.data.length > 0) {
+            const first = json.data[0];
+            setSelectedGenreId(first.genre);
+            setSelectedPreviewGenreId(first.genre);
+            setBackdropInputUrl(first.backdrop);
+          }
+          addLog(`Authenticated successfully! Fetched production data securely (SHA: ${json.sha ? json.sha.substring(0, 7) : "N/A"})`, "success");
+        } else {
+          addLog(`Fetch Error: ${json.error}`, "error");
+        }
+      } catch (err: any) {
+        addLog(`Connection failed: ${err.message}`, "error");
+      }
+    }
+    setLoading(false);
+  };
+
+  // Login submission
+  const handleLogin = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setLoading(true);
+    setLoginError("");
+    try {
+      const response = await fetch("/api/login", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ password: adminPassword })
+      });
+      const json = await response.json();
+      if (response.ok && json.success) {
+        sessionStorage.setItem("admin_authenticated", "true");
+        sessionStorage.setItem("admin_password", adminPassword);
+        setIsAuthenticated(true);
+        addLog("Administrator authenticated successfully.", "success");
+      } else {
+        setLoginError(json.error || "Authentication failed. Incorrect password.");
+      }
+    } catch (err: any) {
+      setLoginError(err.message || "Could not connect to the API server.");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  // Logout handler
+  const handleLogout = () => {
+    sessionStorage.removeItem("admin_authenticated");
+    sessionStorage.removeItem("admin_password");
+    setIsAuthenticated(false);
+    setAdminPassword("");
+    setGenres([]);
+  };
+
+  // Initialize/Reload data when authenticated
+  useEffect(() => {
+    if (isAuthenticated) {
+      loadData(dataSourceMode);
+    }
+  }, [isAuthenticated, dataSourceMode]);
+
+  // Sync scroll on chat
+  useEffect(() => {
+    chatEndRef.current?.scrollIntoView({ behavior: "smooth" });
+  }, [chatMessages]);
+
+  // Handle active genre dropdown change
+  const handleGenreChange = (e: React.ChangeEvent<HTMLSelectElement>) => {
+    const id = e.target.value;
+    setSelectedGenreId(id);
+    setSelectedPreviewGenreId(id);
+    const genre = genres.find(g => g.genre === id);
+    if (genre) {
+      setBackdropInputUrl(genre.backdrop);
+    }
+  };
+
+  // Save changes (sandbox or commit to github)
+  const handleUpdate = async () => {
+    if (!selectedGenreId || !backdropInputUrl) {
+      addLog("Please select a genre and input a valid asset URL.", "error");
+      return;
+    }
+
+    setLoading(true);
+    if (dataSourceMode === "sandbox") {
+      addLog(`Updating local sandbox data for Genre '${selectedGenreId}'...`, "info");
+      try {
+        const response = await fetch("/api/genres/sandbox", {
+          method: "POST",
+          headers: { 
+            "Content-Type": "application/json",
+            "x-admin-password": adminPassword
+          },
+          body: JSON.stringify({ genre: selectedGenreId, backdrop: backdropInputUrl })
+        });
+        const json = await response.json();
+        if (json.success) {
+          setGenres(json.data);
+          addLog(`Updated successfully! Backdrop URL stored locally. Live Android simulator refreshed.`, "success");
+        } else {
+          addLog(`Failed to update sandbox: ${json.error}`, "error");
+        }
+      } catch (err: any) {
+        addLog(`Network error: ${err.message}`, "error");
+      }
+    } else {
+      addLog(`Initiating secure backend GitHub commit sequence...`, "info");
+      try {
+        const response = await fetch("/api/github/update", {
+          method: "POST",
+          headers: { 
+            "Content-Type": "application/json",
+            "x-admin-password": adminPassword
+          },
+          body: JSON.stringify({
+            genre: selectedGenreId,
+            backdrop: backdropInputUrl,
+            commitMessage: `Admin UI: Dynamic backdrop asset update for '${selectedGenreId}' genre`
+          })
+        });
+        const json = await response.json();
+        if (json.success) {
+          setGenres(json.data);
+          addLog(`Commit complete! SHA: ${json.commitSha ? json.commitSha.substring(0, 8) : "N/A"}`, "success");
+          addLog(`GitHub response: File successfully updated on CDN branch. Vercel webhook will redeploy.`, "success");
+        } else {
+          addLog(`GitHub Update Failed: ${json.error}`, "error");
+        }
+      } catch (err: any) {
+        addLog(`Failed to deliver commit payload: ${err.message}`, "error");
+      }
+    }
+    setLoading(false);
+  };
+
+  // Send message to Gemini AI Assistant
+  const handleSendMessage = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!chatInput.trim() || aiLoading) return;
+
+    const userMsg = chatInput.trim();
+    setChatInput("");
+
+    const newMsg: ChatMessage = {
+      id: Math.random().toString(),
+      role: "user",
+      content: userMsg,
+      timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+    };
+
+    setChatMessages(prev => [...prev, newMsg]);
+    setAiLoading(true);
+
+    try {
+      const chatHistory = chatMessages.map(msg => ({
+        role: msg.role,
+        content: msg.content
+      }));
+
+      const response = await fetch("/api/gemini/assist", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ prompt: userMsg, chatHistory })
+      });
+
+      const json = await response.json();
+      if (json.success) {
+        setChatMessages(prev => [...prev, {
+          id: Math.random().toString(),
+          role: "assistant",
+          content: json.text,
+          timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+        }]);
+      } else {
+        setChatMessages(prev => [...prev, {
+          id: Math.random().toString(),
+          role: "assistant",
+          content: `Failed to contact the assistant. ${json.error}`,
+          timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+        }]);
+      }
+    } catch (error: any) {
+      setChatMessages(prev => [...prev, {
+        id: Math.random().toString(),
+        role: "assistant",
+        content: `Error: ${error.message || "Failed to communicate with local development API server."}`,
+        timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+      }]);
+    } finally {
+      setAiLoading(false);
+    }
+  };
+
+  const copyToClipboard = (text: string, key: string) => {
+    navigator.clipboard.writeText(text);
+    setCopiedKey(key);
+    setTimeout(() => setCopiedKey(""), 2000);
+  };
+
+  // Active genre details helper
+  const activeGenrePreview = genres.find(g => g.genre === selectedPreviewGenreId) || genres[0];
+
+  if (!isAuthenticated) {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-[#f1f5f9] font-sans p-6">
+        <div className="w-full max-w-md bg-white rounded-2xl border border-slate-200 shadow-xl overflow-hidden">
+          {/* Top colored accent header */}
+          <div className="bg-slate-900 px-8 py-8 text-center relative overflow-hidden">
+            <div className="absolute inset-0 bg-gradient-to-tr from-rose-950/20 to-indigo-950/20"></div>
+            <div className="relative z-10">
+              <div className="w-12 h-12 bg-rose-600 rounded-2xl flex items-center justify-center text-white font-bold text-xl mx-auto shadow-md mb-3">
+                D
+              </div>
+              <h2 className="text-xl font-black text-white tracking-tight">DramaCloud Admin</h2>
+              <p className="text-slate-400 text-xs mt-1">
+                Enter your security password to access the dynamic genre asset manager.
+              </p>
+            </div>
+          </div>
+
+          <form onSubmit={handleLogin} className="p-8 space-y-6">
+            {loginError && (
+              <div className="p-3 bg-rose-50 border border-rose-200 text-rose-700 text-xs rounded-lg font-medium flex items-center gap-2">
+                <AlertTriangle className="w-4 h-4 text-rose-600 shrink-0" />
+                <span>{loginError}</span>
+              </div>
+            )}
+
+            <div className="space-y-2">
+              <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block">
+                Administrator Password
+              </label>
+              <div className="relative">
+                <input
+                  id="login-password"
+                  type="password"
+                  placeholder="••••••••••••"
+                  value={adminPassword}
+                  onChange={(e) => {
+                    setAdminPassword(e.target.value);
+                    if (loginError) setLoginError("");
+                  }}
+                  className="w-full h-11 px-4 bg-slate-50 border border-slate-200 rounded-xl text-slate-800 focus:outline-none focus:ring-2 focus:ring-rose-500 font-mono text-sm transition-all"
+                  required
+                />
+              </div>
+            </div>
+
+            <button
+              id="btn-login-submit"
+              type="submit"
+              disabled={loading}
+              className="w-full h-11 bg-rose-600 hover:bg-rose-700 text-white font-bold rounded-xl shadow-md transition-all active:scale-[0.98] flex items-center justify-center gap-2 text-sm disabled:opacity-50"
+            >
+              {loading ? (
+                <RefreshCw className="w-4 h-4 animate-spin" />
+              ) : (
+                <>
+                  <Save className="w-4 h-4" />
+                  Unlock Console
+                </>
+              )}
+            </button>
+          </form>
+
+          <div className="bg-slate-50 px-8 py-4 border-t border-slate-100 text-center text-[11px] text-slate-400 font-medium">
+            Protected by <span className="font-mono text-rose-600">ADMIN_PASSWORD</span> env variable.
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="flex flex-col h-screen bg-[#f8fafc] text-slate-800 font-sans overflow-hidden">
+      {/* Header Navigation */}
+      <nav id="navbar" className="h-16 flex items-center justify-between px-8 bg-white border-b border-slate-200 shadow-sm shrink-0">
+        <div className="flex items-center gap-3">
+          <div className="w-9 h-9 bg-indigo-600 rounded-xl flex items-center justify-center text-white font-bold text-lg shadow-sm">
+            D
+          </div>
+          <div>
+            <span className="font-extrabold tracking-tight text-slate-900 text-lg">DramaCloud Admin</span>
+            <span className="ml-3 px-2 py-0.5 bg-emerald-50 text-emerald-700 text-[10px] font-bold rounded-full border border-emerald-200 uppercase">
+              API Live
+            </span>
+          </div>
+        </div>
+
+        <div className="flex items-center gap-6 text-sm text-slate-500 font-medium">
+          <div className="flex items-center gap-2">
+            <span className="w-2.5 h-2.5 rounded-full bg-indigo-600 animate-pulse"></span>
+            <span className="text-slate-600 font-medium">Connected to Vercel CDN</span>
+          </div>
+          <div className="h-6 w-[1px] bg-slate-200"></div>
+          
+          <button 
+            id="btn-logout"
+            onClick={handleLogout}
+            className="px-3 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-600 hover:text-slate-950 font-bold rounded-lg text-xs transition-colors flex items-center gap-1"
+          >
+            Lock Dashboard
+          </button>
+
+          <div className="w-8 h-8 rounded-full bg-slate-100 border border-slate-200 flex items-center justify-center text-indigo-600 font-bold uppercase text-xs shadow-inner">
+            AD
+          </div>
+        </div>
+      </nav>
+
+      {/* Main Layout Area */}
+      <div className="flex-1 flex overflow-hidden">
+        
+        {/* Sidebar */}
+        <aside id="sidebar" className="w-72 bg-white border-r border-slate-200 p-6 flex flex-col gap-6 overflow-y-auto shrink-0">
+          <div>
+            <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-3">API Data Connection</p>
+            
+            <div className="flex items-center gap-2 px-3 py-2 bg-indigo-50 border border-indigo-100 rounded-lg">
+              <Settings2 className="w-4 h-4 text-indigo-600" />
+              <span className="text-xs font-bold text-indigo-900">GitHub Repository Integration</span>
+            </div>
+            
+            <p className="text-[11px] text-slate-400 mt-2 italic">
+              Commits JSON changes in real-time to your custom public GitHub repository.
+            </p>
+          </div>
+
+          {/* GitHub configuration details */}
+          {dataSourceMode === "github" && (
+            <div className="flex flex-col gap-3 p-4 bg-slate-50 border border-slate-100 rounded-xl">
+              <div className="flex items-center gap-2 text-rose-600 font-bold text-xs uppercase">
+                <Github className="w-4 h-4" />
+                Production CDN Config
+              </div>
+              
+              <div className="text-[11px] text-slate-500 space-y-2">
+                <p>
+                  GitHub parameters are now <span className="font-semibold text-emerald-600">securely stored on the backend</span> to protect secrets.
+                </p>
+                <div className="border-t border-slate-200/60 pt-2 space-y-1 font-mono text-[10px]">
+                  <div className="flex justify-between">
+                    <span className="text-slate-400">Owner:</span>
+                    <span className="text-slate-700 font-bold">Configured</span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="text-slate-400">Repository:</span>
+                    <span className="text-slate-700 font-bold">Configured</span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="text-slate-400">File Path:</span>
+                    <span className="text-slate-700 font-bold">Configured</span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="text-slate-400">Branch:</span>
+                    <span className="text-slate-700 font-bold">Configured</span>
+                  </div>
+                </div>
+              </div>
+
+              <button 
+                id="btn-fetch-github"
+                onClick={() => loadData("github")}
+                disabled={loading}
+                className="w-full mt-2 py-1.5 bg-rose-600 hover:bg-rose-700 text-white font-bold rounded-lg text-xs flex items-center justify-center gap-1.5 disabled:opacity-50 transition-colors"
+              >
+                <RefreshCw className={`w-3.5 h-3.5 ${loading ? "animate-spin" : ""}`} />
+                Reload Production Data
+              </button>
+            </div>
+          )}
+
+          {/* Metadata view info */}
+          <div className="mt-auto">
+            <div className="p-4 bg-slate-900 rounded-xl text-white shadow-md">
+              <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">GitHub Integration</p>
+              <div className="flex items-center justify-between mt-1">
+                <span className="text-xs font-semibold font-mono truncate max-w-[130px]">
+                  Secure Backend Env
+                </span>
+                <div className="w-2.5 h-2.5 rounded-full bg-emerald-400 shadow-[0_0_8px_rgba(52,211,153,0.6)]"></div>
+              </div>
+              <p className="text-[9px] mt-2 text-slate-400 italic">
+                Remote database connection active & verified on server.
+              </p>
+            </div>
+          </div>
+        </aside>
+
+        {/* Dashboard Panels */}
+        <main id="main-content" className="flex-1 flex flex-col p-6 overflow-hidden gap-6">
+          
+          {/* Top segment: Grid of Edit tools and Interactive Android Mockup */}
+          <div className="flex-1 grid grid-cols-12 gap-6 min-h-0">
+            
+            {/* Left Col: Configurations & Inputs */}
+            <section className="col-span-7 flex flex-col gap-4 overflow-y-auto pr-2">
+              <div className="shrink-0">
+                <h1 className="text-2xl font-extrabold text-slate-900 tracking-tight">Update Genre Assets</h1>
+                <p className="text-slate-500 text-xs mt-1">
+                  Managing static API <span className="font-mono font-semibold text-indigo-600">genres.json</span> served dynamically via Vercel Edge.
+                </p>
+              </div>
+
+              {/* Data status loader banner */}
+              {genres.length === 0 && !loading && (
+                <div className="p-4 bg-amber-50 border border-amber-200 rounded-xl flex items-start gap-3">
+                  <AlertTriangle className="text-amber-600 w-5 h-5 shrink-0 mt-0.5" />
+                  <div>
+                    <h4 className="text-sm font-bold text-amber-900">No Genres Loaded</h4>
+                    <p className="text-xs text-amber-700 mt-1">
+                      Unable to pull static genres schema. Ensure your API endpoint contains valid array data. Let's load the Sandbox default to proceed!
+                    </p>
+                    <button 
+                      onClick={() => { setDataSourceMode("sandbox"); loadData("sandbox"); }}
+                      className="mt-2 px-3 py-1 bg-amber-600 hover:bg-amber-700 text-white font-bold rounded text-xs"
+                    >
+                      Reset to Local Sandbox
+                    </button>
+                  </div>
+                </div>
+              )}
+
+              {/* Editing Card Form */}
+              <div className="bg-white rounded-xl border border-slate-200 shadow-sm p-6 flex flex-col gap-4">
+                
+                {/* Selection */}
+                <div className="flex flex-col gap-1.5">
+                  <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Select Active Genre</label>
+                  <div className="relative">
+                    <select 
+                      id="select-genre"
+                      value={selectedGenreId}
+                      onChange={handleGenreChange}
+                      className="w-full h-10 pl-3 pr-10 bg-slate-50 border border-slate-200 rounded-lg appearance-none text-slate-700 focus:outline-none focus:ring-2 focus:ring-indigo-500 font-semibold text-sm"
+                    >
+                      {genres.map((g) => (
+                        <option key={g.genre} value={g.genre}>{g.genre}</option>
+                      ))}
+                    </select>
+                    <div className="absolute right-3 top-1/2 -translate-y-1/2 pointer-events-none text-slate-400">
+                      <ChevronRight className="w-4 h-4 rotate-90" />
+                    </div>
+                  </div>
+                </div>
+
+                {/* Input Image Url */}
+                <div className="flex flex-col gap-1.5">
+                  <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">New Backdrop Asset URL</label>
+                  <input 
+                    id="input-backdrop-url"
+                    type="text" 
+                    value={backdropInputUrl}
+                    onChange={(e) => setBackdropInputUrl(e.target.value)}
+                    placeholder="https://images.unsplash.com/..."
+                    className="w-full h-10 px-3 bg-slate-50 border border-slate-200 rounded-lg text-slate-700 focus:outline-none focus:ring-2 focus:ring-indigo-500 font-mono text-xs"
+                  />
+
+                  <p className="text-[11px] text-slate-400 flex items-center gap-1 mt-1">
+                    <Info className="w-3.5 h-3.5 shrink-0 text-slate-500" />
+                    Updates reflect dynamically in Android's cache via Coil's disk storage keys.
+                  </p>
+                </div>
+
+                {/* Buttons */}
+                <div className="flex items-center gap-3 pt-2">
+                  <button 
+                    id="btn-update-asset"
+                    onClick={handleUpdate}
+                    disabled={loading}
+                    className="flex-1 h-10 bg-indigo-600 hover:bg-indigo-700 text-white font-bold rounded-lg shadow-sm transition-all active:scale-[0.98] flex items-center justify-center gap-2 text-sm disabled:opacity-50"
+                  >
+                    {dataSourceMode === "sandbox" ? (
+                      <>
+                        <Save className="w-4 h-4" />
+                        Update Sandbox File
+                      </>
+                    ) : (
+                      <>
+                        <Github className="w-4 h-4" />
+                        Commit to CDN repository
+                      </>
+                    )}
+                  </button>
+                  <button 
+                    id="btn-reset-input"
+                    onClick={() => {
+                      const active = genres.find(g => g.genre === selectedGenreId);
+                      if (active) setBackdropInputUrl(active.backdrop);
+                    }}
+                    className="px-4 h-10 bg-slate-100 text-slate-600 font-bold rounded-lg hover:bg-slate-200 transition-colors text-xs"
+                  >
+                    Reset
+                  </button>
+                </div>
+              </div>
+
+              {/* Status Log Panel */}
+              <div className="flex-1 bg-slate-900 border border-slate-950 rounded-xl p-4 flex flex-col font-mono text-[11px] text-slate-300 min-h-[140px] shadow-inner">
+                <div className="flex items-center justify-between border-b border-slate-800 pb-2 mb-2 text-slate-400 text-xs font-bold shrink-0">
+                  <span className="flex items-center gap-1 text-slate-200">
+                    <Code className="w-3.5 h-3.5 text-indigo-400" />
+                    LIVE PROCESS CONSOLE
+                  </span>
+                  <button 
+                    onClick={() => setStatusLogs([])}
+                    className="hover:text-white hover:underline text-[10px]"
+                  >
+                    Clear Logs
+                  </button>
+                </div>
+                <div className="flex-1 overflow-y-auto space-y-1.5 pr-1 max-h-[160px]">
+                  {statusLogs.length === 0 ? (
+                    <div className="text-slate-500 text-center py-6 italic">Waiting for update requests or API calls...</div>
+                  ) : (
+                    statusLogs.map((log, index) => (
+                      <div key={index} className="flex gap-2 items-start leading-relaxed">
+                        <span className="text-slate-600 shrink-0 font-bold">[{log.time}]</span>
+                        <span className={
+                          log.type === "success" ? "text-emerald-400 font-bold" :
+                          log.type === "error" ? "text-red-400 font-bold" : "text-indigo-300"
+                        }>
+                          {log.text}
+                        </span>
+                      </div>
+                    ))
+                  )}
+                </div>
+              </div>
+
+            </section>
+
+            {/* Right Col: Interactive Android Phone Simulator */}
+            <section className="col-span-5 flex flex-col items-center justify-center shrink-0">
+              <div className="flex items-center justify-between w-[290px] mb-2">
+                <span className="text-xs font-bold text-slate-400 uppercase tracking-wider">Live Android Simulator</span>
+                
+                {/* Simulated offline toggle */}
+                <button 
+                  id="toggle-offline-status"
+                  onClick={() => setIsAndroidOffline(!isAndroidOffline)}
+                  className={`flex items-center gap-1.5 px-2 py-1 rounded text-[10px] font-bold transition-all ${isAndroidOffline ? "bg-red-100 text-red-700 border border-red-200" : "bg-emerald-100 text-emerald-700 border border-emerald-200"}`}
+                  title="Toggle offline state to simulate network recovery models in Kotlin"
+                >
+                  {isAndroidOffline ? (
+                    <>
+                      <WifiOff className="w-3.5 h-3.5" />
+                      SIMULATE OFFLINE
+                    </>
+                  ) : (
+                    <>
+                      <Wifi className="w-3.5 h-3.5 animate-pulse" />
+                      SIMULATE ONLINE
+                    </>
+                  )}
+                </button>
+              </div>
+
+              {/* Phone Container */}
+              <div className="relative w-[300px] h-[580px] bg-[#000000] rounded-[2.8rem] border-[6px] border-zinc-800 shadow-2xl overflow-hidden flex flex-col ring-4 ring-slate-200/50">
+                {/* Top Camera Punch Hole - Modern design */}
+                <div className="absolute top-2.5 left-1/2 -translate-x-1/2 w-2.5 h-2.5 bg-black rounded-full z-20 ring-1 ring-zinc-800"></div>
+
+                {/* Mobile Screen Content */}
+                <div className="flex-1 bg-black relative flex flex-col overflow-hidden text-white pt-5">
+                  
+                  {isAndroidOffline ? (
+                    /* Offline State screen inside Android */
+                    <div className="flex-1 flex flex-col items-center justify-center p-6 text-center bg-[#0d131f] h-full">
+                      <div className="w-12 h-12 rounded-full bg-red-950/50 border border-red-500/30 flex items-center justify-center mb-4">
+                        <WifiOff className="w-6 h-6 text-red-400" />
+                      </div>
+                      <h4 className="text-sm font-bold text-red-400">Connection Offline</h4>
+                      <p className="text-[11px] text-slate-400 mt-2">
+                        Unable to connect to dynamic static API CDN hosted on Vercel. Ktor / Retrofit IOException caught safely.
+                      </p>
+                      
+                      <button 
+                        onClick={() => { setIsAndroidOffline(false); addLog("Android app: Retrying connections via live network...", "info"); }}
+                        className="mt-5 px-4 py-1.5 bg-rose-600 hover:bg-rose-700 text-white font-bold rounded-lg text-xs tracking-wide transition-all"
+                      >
+                        Try Again (Retry)
+                      </button>
+
+                      <div className="mt-8 text-[9px] text-slate-500 border-t border-slate-800/80 pt-3 w-full">
+                        Showing fallback cache or last loaded dataset if cached by Coil.
+                      </div>
+                    </div>
+                  ) : (
+                    /* Online UI showing the actual lists/grid dynamically populated from Sandbox or GitHub */
+                    <div className="flex-1 flex flex-col overflow-hidden relative">
+                      {/* Genres Header text strictly matching the image */}
+                      <div className="px-4 pt-3 pb-2 shrink-0 flex items-center justify-between bg-black z-10">
+                        <h2 className="text-xl font-black text-white tracking-tight">Genres</h2>
+                      </div>
+
+                      {/* Scrollable grid area */}
+                      <div className="flex-1 overflow-y-auto px-4 pb-4 pt-1 space-y-3 scrollbar-none">
+                        {genres.length === 0 ? (
+                          /* Skeleton fallback when empty */
+                          <div className="grid grid-cols-2 gap-3">
+                            {[...Array(6)].map((_, i) => (
+                              <div key={i} className="aspect-[14/9] w-full rounded-xl bg-zinc-900 animate-pulse"></div>
+                            ))}
+                          </div>
+                        ) : (
+                          <div className="grid grid-cols-2 gap-3 pb-4">
+                            {genres.map((g) => (
+                              <div 
+                                key={g.genre}
+                                onClick={() => {
+                                  setSelectedPreviewGenreId(g.genre);
+                                  setSelectedGenreId(g.genre);
+                                  setBackdropInputUrl(g.backdrop);
+                                }}
+                                className={`group relative aspect-[14/9] w-full rounded-xl overflow-hidden cursor-pointer border transition-all duration-300 ${
+                                  selectedPreviewGenreId === g.genre 
+                                    ? "border-rose-500 ring-2 ring-rose-500/50 scale-[0.98]" 
+                                    : "border-zinc-900 hover:border-zinc-800"
+                                }`}
+                              >
+                                {/* Background Backdrop Image */}
+                                <img 
+                                  src={g.backdrop} 
+                                  alt={g.genre}
+                                  className="absolute inset-0 w-full h-full object-cover transition-transform duration-500 group-hover:scale-105"
+                                  onError={(e) => {
+                                    (e.target as HTMLImageElement).src = "https://images.unsplash.com/photo-1574267431629-2e570b0643ba?q=80&w=600";
+                                  }}
+                                />
+                                {/* Bottom Scrim Gradient Overlay */}
+                                <div className="absolute inset-0 bg-gradient-to-t from-black/95 via-black/30 to-transparent z-10"></div>
+                                
+                                {/* Label Text at the Bottom Left */}
+                                <div className="absolute bottom-3 left-3 right-3 z-20 leading-none">
+                                  <p className="text-[11px] font-extrabold text-white tracking-tight text-left drop-shadow-md">
+                                    {g.genre}
+                                  </p>
+                                </div>
+                              </div>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+
+                    </div>
+                  )}
+                </div>
+              </div>
+            </section>
+
+          </div>
+
+        </main>
+      </div>
+    </div>
+  );
+}
