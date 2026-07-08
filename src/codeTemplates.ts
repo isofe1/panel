@@ -19,8 +19,11 @@ import kotlinx.serialization.SerialName
 
 @Serializable
 data class Genre(
-    @SerialName("genre") val genre: String,
-    @SerialName("backdrop") val backdrop: String
+    @SerialName("name") val name: String,
+    @SerialName("type") val type: String,
+    @SerialName("mv_id") val mvId: Int?,
+    @SerialName("tv_id") val tvId: Int?,
+    @SerialName("bg_url") val bgUrl: String
 )`
   },
 
@@ -234,7 +237,7 @@ fun GenresGrid(genres: List<Genre>) {
         verticalArrangement = Arrangement.spacedBy(12.dp),
         modifier = Modifier.fillMaxSize()
     ) {
-        items(genres, key = { it.genre }) { genre ->
+        items(genres, key = { it.name }) { genre ->
             GenreCard(genre = genre)
         }
     }
@@ -252,11 +255,11 @@ fun GenreCard(genre: Genre) {
         Box(modifier = Modifier.fillMaxSize()) {
             AsyncImage(
                 model = ImageRequest.Builder(LocalContext.current)
-                    .data(genre.backdrop)
+                    .data(genre.bgUrl)
                     .crossfade(true)
-                    .diskCacheKey(genre.genre)
+                    .diskCacheKey(genre.name)
                     .build(),
-                contentDescription = genre.genre,
+                contentDescription = genre.name,
                 contentScale = ContentScale.Crop,
                 modifier = Modifier.fillMaxSize()
             )
@@ -277,7 +280,7 @@ fun GenreCard(genre: Genre) {
                     .padding(12.dp)
             ) {
                 Text(
-                    text = genre.genre,
+                    text = genre.name,
                     color = Color.White,
                     fontWeight = FontWeight.Bold,
                     style = MaterialTheme.typography.titleMedium

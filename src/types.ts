@@ -1,6 +1,9 @@
 export interface Genre {
-  genre: string; // The genre name/identifier (e.g., "Romance")
-  backdrop: string; // The backdrop image URL (e.g., "https://...")
+  name: string;        // The genre or keyword name
+  type: string;        // The category classification (e.g. "Genre" or "Keyword")
+  mv_id: number | null; // TMDB Movie Genre/Keyword ID (nullable)
+  tv_id: number | null; // TMDB TV Genre/Keyword ID (nullable)
+  bg_url: string;      // The background backdrop image URL
 }
 
 export interface GitHubConfig {

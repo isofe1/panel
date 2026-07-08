@@ -27,6 +27,58 @@ if (apiKey && apiKey !== "MY_GEMINI_API_KEY") {
   console.log("GEMINI_API_KEY not configured. Running AI Assistant in simulation/educational fallback mode.");
 }
 
+const DEFAULT_GENRES = [
+  {
+    "name": "Romance",
+    "type": "Genre",
+    "mv_id": 10749,
+    "tv_id": 10766,
+    "bg_url": "https://image.tmdb.org/t/p/w185/lq0YqJuffMuZhoKTiC5xDqvtCSn.jpg"
+  },
+  {
+    "name": "Fantasy",
+    "type": "Genre",
+    "mv_id": 14,
+    "tv_id": 10765,
+    "bg_url": "https://images.unsplash.com/photo-1518709268805-4e9042af9f23?q=80&w=1200"
+  },
+  {
+    "name": "Mystery",
+    "type": "Genre",
+    "mv_id": 9648,
+    "tv_id": 80,
+    "bg_url": "https://images.unsplash.com/photo-1509248961158-e54f6934749c?q=80&w=1200"
+  },
+  {
+    "name": "Comedy",
+    "type": "Genre",
+    "mv_id": 35,
+    "tv_id": 35,
+    "bg_url": "https://images.unsplash.com/photo-1517604931442-7e0c8ed2963c?q=80&w=1200"
+  },
+  {
+    "name": "Action",
+    "type": "Genre",
+    "mv_id": 28,
+    "tv_id": 10759,
+    "bg_url": "https://images.unsplash.com/photo-1508700115892-45ecd05ae2ad?q=80&w=1200"
+  },
+  {
+    "name": "Thriller",
+    "type": "Genre",
+    "mv_id": 53,
+    "tv_id": null,
+    "bg_url": "https://images.unsplash.com/photo-1515621061946-eff1c2a352bd?q=80&w=1200"
+  },
+  {
+    "name": "Sci-Fi",
+    "type": "Genre",
+    "mv_id": 878,
+    "tv_id": 10765,
+    "bg_url": "https://images.unsplash.com/photo-1534447677768-be436bb09401?q=80&w=1200"
+  }
+];
+
 const app = express();
 app.use(express.json({ limit: "5mb" }));
 
@@ -69,20 +121,25 @@ app.post("/api/github/fetch", verifyAdmin, async (req, res) => {
   if (missing.length > 0) {
     try {
       const localPath = path.join(process.cwd(), "genres.json");
+      let parsedJson;
       if (fs.existsSync(localPath)) {
         console.log("GitHub credentials missing. Falling back to local genres.json file.");
         const fileContent = fs.readFileSync(localPath, "utf-8");
-        const parsedJson = JSON.parse(fileContent);
-        return res.json({
-          success: true,
-          sha: "",
-          isLocalFallback: true,
-          data: parsedJson,
-          message: "Loaded from local workspace file (GitHub secrets not fully configured)."
-        });
+        parsedJson = JSON.parse(fileContent);
+      } else {
+        console.log("GitHub credentials missing & local file deleted. Recreating genres.json with default genres.");
+        fs.writeFileSync(localPath, JSON.stringify(DEFAULT_GENRES, null, 4), "utf-8");
+        parsedJson = DEFAULT_GENRES;
       }
+      return res.json({
+        success: true,
+        sha: "",
+        isLocalFallback: true,
+        data: parsedJson,
+        message: "Loaded from local workspace file (GitHub secrets not fully configured)."
+      });
     } catch (localErr: any) {
-      console.error("Local fallback reading failed:", localErr);
+      console.error("Local fallback reading/writing failed:", localErr);
     }
 
     return res.status(500).json({
@@ -104,6 +161,16 @@ app.post("/api/github/fetch", verifyAdmin, async (req, res) => {
     const response = await fetch(url, { headers });
 
     if (!response.ok) {
+      if (response.status === 404) {
+        console.log("File not found on GitHub. Returning DEFAULT_GENRES.");
+        return res.json({
+          success: true,
+          sha: "",
+          isNewFile: true,
+          data: DEFAULT_GENRES,
+          message: "No remote 'genres.json' file found in the repository yet. Initialized with default genres list."
+        });
+      }
       const errorText = await response.text();
       return res.status(response.status).json({
         success: false,
@@ -144,12 +211,12 @@ app.post("/api/github/fetch", verifyAdmin, async (req, res) => {
 
 // 3. GitHub: Commit update to custom repo (GET SHA -> Decode -> Update -> Encode -> PUT)
 app.post("/api/github/update", verifyAdmin, async (req, res) => {
-  const { genre: genreName, backdrop, commitMessage } = req.body;
+  const { genre: genreName, backdrop, genres: updatedGenresArray, commitMessage } = req.body;
 
-  if (!genreName || !backdrop) {
+  if (!updatedGenresArray && (!genreName || !backdrop)) {
     return res.status(400).json({ 
       success: false, 
-      error: "Missing parameters. Need genre and backdrop." 
+      error: "Missing parameters. Need either 'genres' array or 'genre' and 'backdrop'." 
     });
   }
 
@@ -167,29 +234,39 @@ app.post("/api/github/update", verifyAdmin, async (req, res) => {
   if (missing.length > 0) {
     try {
       const localPath = path.join(process.cwd(), "genres.json");
-      if (fs.existsSync(localPath)) {
-        console.log("GitHub credentials missing. Attempting to write locally...");
-        const fileContent = fs.readFileSync(localPath, "utf-8");
-        const existingGenres = JSON.parse(fileContent);
-
-        const index = existingGenres.findIndex((g: any) => g.genre === genreName);
-        if (index === -1) {
-          return res.status(404).json({ 
-            success: false, 
-            error: `Genre '${genreName}' not found in the local file.` 
-          });
+      let existingGenres: any[] = [];
+      
+      if (updatedGenresArray && Array.isArray(updatedGenresArray)) {
+        existingGenres = updatedGenresArray;
+      } else {
+        if (fs.existsSync(localPath)) {
+          console.log("GitHub credentials missing. Attempting to write locally...");
+          const fileContent = fs.readFileSync(localPath, "utf-8");
+          existingGenres = JSON.parse(fileContent);
+        } else {
+          console.log("GitHub credentials missing & local file deleted. Recreating genres.json with default genres.");
+          existingGenres = JSON.parse(JSON.stringify(DEFAULT_GENRES));
         }
 
-        existingGenres[index].backdrop = backdrop;
-        fs.writeFileSync(localPath, JSON.stringify(existingGenres, null, 4), "utf-8");
+        if (!Array.isArray(existingGenres)) {
+          existingGenres = JSON.parse(JSON.stringify(DEFAULT_GENRES));
+        }
 
-        return res.json({
-          success: true,
-          message: "Successfully updated local genres.json file (Development Mode).",
-          isLocalFallback: true,
-          data: existingGenres
-        });
+        const index = existingGenres.findIndex((g: any) => g.name === genreName);
+        if (index === -1) {
+          existingGenres.push({ name: genreName, bg_url: backdrop, type: "Genre", mv_id: null, tv_id: null });
+        } else {
+          existingGenres[index].bg_url = backdrop;
+        }
       }
+      fs.writeFileSync(localPath, JSON.stringify(existingGenres, null, 4), "utf-8");
+
+      return res.json({
+        success: true,
+        message: "Successfully updated local genres.json file (Development Mode).",
+        isLocalFallback: true,
+        data: existingGenres
+      });
     } catch (localErr: any) {
       console.error("Local fallback writing failed:", localErr);
     }
@@ -210,7 +287,7 @@ app.post("/api/github/update", verifyAdmin, async (req, res) => {
   const getUrl = `https://api.github.com/repos/${owner}/${repo}/contents/${filePath}?ref=${branch}`;
 
   try {
-    // Step A: Fetch current file to get active SHA and content
+    // Step A: Fetch current state of file to resolve SHA
     console.log(`GitHub Update: Fetching current state of file to resolve SHA...`);
     const getResponse = await fetch(getUrl, { headers: { ...headers, "Content-Type": undefined } as any });
 
@@ -224,9 +301,9 @@ app.post("/api/github/update", verifyAdmin, async (req, res) => {
       const decodedString = Buffer.from(base64Content, "base64").toString("utf-8");
       existingGenres = JSON.parse(decodedString);
     } else if (getResponse.status === 404) {
-      // File doesn't exist yet, we will create a new one!
-      console.log("File does not exist on GitHub. A new file will be created.");
-      existingGenres = []; 
+      // File doesn't exist yet, we will initialize with our DEFAULT_GENRES list!
+      console.log("File does not exist on GitHub. Initializing with default starter genres.");
+      existingGenres = JSON.parse(JSON.stringify(DEFAULT_GENRES)); 
     } else {
       const errText = await getResponse.text();
       return res.status(getResponse.status).json({
@@ -235,23 +312,21 @@ app.post("/api/github/update", verifyAdmin, async (req, res) => {
       });
     }
 
-    // Step B: Apply the backdrop image URL update
-    if (!Array.isArray(existingGenres)) {
-      return res.status(400).json({ 
-        success: false, 
-        error: "GitHub file content is not a valid JSON array of genres." 
-      });
-    }
+    // Step B: Apply the update (either complete overwrite or single update)
+    if (updatedGenresArray && Array.isArray(updatedGenresArray)) {
+      existingGenres = updatedGenresArray;
+    } else {
+      if (!Array.isArray(existingGenres)) {
+        existingGenres = JSON.parse(JSON.stringify(DEFAULT_GENRES));
+      }
 
-    const index = existingGenres.findIndex((g: any) => g.genre === genreName);
-    if (index === -1) {
-      return res.status(404).json({ 
-        success: false, 
-        error: `Genre '${genreName}' not found in the GitHub file.` 
-      });
+      const index = existingGenres.findIndex((g: any) => g.name === genreName);
+      if (index === -1) {
+        existingGenres.push({ name: genreName, bg_url: backdrop, type: "Genre", mv_id: null, tv_id: null });
+      } else {
+        existingGenres[index].bg_url = backdrop;
+      }
     }
-
-    existingGenres[index].backdrop = backdrop;
 
     // Step C: Convert back to pretty base64
     const updatedJsonString = JSON.stringify(existingGenres, null, 2);
