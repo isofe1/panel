@@ -1151,7 +1151,7 @@ export default function App() {
                               <img
                                 src={genreBgUrlInput}
                                 alt="Backdrop asset preview"
-                                className="max-w-full max-h-full object-contain rounded-lg shadow-md"
+                                className="w-full h-full object-contain rounded-lg shadow-md"
                                 referrerPolicy="no-referrer"
                                 onError={() => setImageError(true)}
                               />
