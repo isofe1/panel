@@ -1,6 +1,5 @@
 import express from "express";
 import path from "path";
-import { createServer as createViteServer } from "vite";
 import fs from "fs";
 import { GoogleGenAI, ThinkingLevel } from "@google/genai";
 import dotenv from "dotenv";
@@ -346,13 +345,15 @@ Feel free to paste your actual Kotlin questions or ask how to setup offline retr
 
   // --- Vite Middleware / Static Asset Configuration ---
   if (process.env.NODE_ENV !== "production" && !process.env.VERCEL) {
-    createViteServer({
-      server: { middlewareMode: true },
-      appType: "spa",
-    }).then((vite) => {
-      app.use(vite.middlewares);
+    import("vite").then(({ createServer }) => {
+      createServer({
+        server: { middlewareMode: true },
+        appType: "spa",
+      }).then((vite) => {
+        app.use(vite.middlewares);
+      });
     }).catch((err) => {
-      console.error("Failed to create Vite server:", err);
+      console.error("Failed to load Vite server dynamically:", err);
     });
   } else if (!process.env.VERCEL) {
     const distPath = path.join(process.cwd(), "dist");
