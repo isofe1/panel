@@ -20,3 +20,40 @@ export interface ChatMessage {
   content: string;
   timestamp: string;
 }
+
+export interface LocalSnapshot {
+  id: string;
+  name: string;
+  timestamp: string;
+  genresCount: number;
+  data: Genre[];
+}
+
+export interface PinnedItem {
+  drama_id: string;
+  position: number; // 1-indexed
+}
+
+export interface HeroConfig {
+  mode: "AUTO" | "MANUAL" | "HYBRID";
+  max_items: number;
+  auto_source: "popular" | "trending" | "latest";
+  pinned_items: PinnedItem[];
+}
+
+export interface SystemStats {
+  success: boolean;
+  uptime: number;
+  memory: {
+    rss: number;
+    heapTotal: number;
+    heapUsed: number;
+  };
+  nodeVersion: string;
+  platform: string;
+  githubConfigured: boolean;
+  owner: string;
+  repo: string;
+  branch: string;
+  filePath: string;
+}

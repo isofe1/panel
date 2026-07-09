@@ -32,9 +32,25 @@ import {
   Plus,
   Tag,
   Pencil,
-  X
+  X,
+  LayoutDashboard,
+  Terminal,
+  Users,
+  Bell,
+  LogOut,
+  Activity,
+  Server,
+  Cpu,
+  Shield,
+  Clock,
+  HardDrive,
+  TrendingUp,
+  Sliders,
+  Pin,
+  Tv,
+  GripVertical
 } from "lucide-react";
-import { Genre, GitHubConfig, ChatMessage } from "./types";
+import { Genre, GitHubConfig, ChatMessage, LocalSnapshot, SystemStats, HeroConfig, PinnedItem } from "./types";
 import { kotlinTemplates } from "./codeTemplates";
 
 const BACKDROP_PRESETS = [
@@ -53,6 +69,9 @@ export default function App() {
   const [isDark, setIsDark] = useState<boolean>(() => {
     return localStorage.getItem("admin_theme") === "dark";
   });
+
+  // Navigation active tab/section
+  const [activeTab, setActiveTab] = useState<string>("genres"); // "overview" | "genres" | "cdn" | "users" | "logs"
 
   // Security Authentication states
   const [isAuthenticated, setIsAuthenticated] = useState<boolean>(() => {
@@ -90,6 +109,184 @@ export default function App() {
   // Android preview simulator states
   const [selectedPreviewGenreId, setSelectedPreviewGenreId] = useState<string>("");
   
+  // Hero Config states
+  const [heroConfig, setHeroConfig] = useState<HeroConfig>({
+    mode: "HYBRID",
+    max_items: 6,
+    auto_source: "popular",
+    pinned_items: [
+      { drama_id: "drama_123_id", position: 1 },
+      { drama_id: "drama_456_id", position: 3 }
+    ]
+  });
+  const [initialHeroConfig, setInitialHeroConfig] = useState<HeroConfig>({
+    mode: "HYBRID",
+    max_items: 6,
+    auto_source: "popular",
+    pinned_items: [
+      { drama_id: "drama_123_id", position: 1 },
+      { drama_id: "drama_456_id", position: 3 }
+    ]
+  });
+  const [pendingUnpin, setPendingUnpin] = useState<{ drama_id: string; position: number; title: string } | null>(null);
+  const [heroLoading, setHeroLoading] = useState<boolean>(false);
+  const [heroSaving, setHeroSaving] = useState<boolean>(false);
+  const [heroSyncing, setHeroSyncing] = useState<boolean>(false);
+  const [newPinnedDramaId, setNewPinnedDramaId] = useState<string>("");
+  const [newPinnedPosition, setNewPinnedPosition] = useState<number>(1);
+
+  // Drag and Drop states and handlers
+  const [draggedPosition, setDraggedPosition] = useState<number | null>(null);
+  const [dragOverPosition, setDragOverPosition] = useState<number | null>(null);
+
+  const handleDragStart = (e: React.DragEvent, position: number) => {
+    setDraggedPosition(position);
+    e.dataTransfer.effectAllowed = "move";
+    e.dataTransfer.setData("text/plain", position.toString());
+  };
+
+  const handleDragOver = (e: React.DragEvent, position: number) => {
+    e.preventDefault();
+    if (draggedPosition !== position) {
+      setDragOverPosition(position);
+    }
+  };
+
+  const handleDragLeave = () => {
+    setDragOverPosition(null);
+  };
+
+  const handleDrop = (e: React.DragEvent, targetPosition: number) => {
+    e.preventDefault();
+    if (draggedPosition !== null && draggedPosition !== targetPosition) {
+      handleDragAndDropSwap(draggedPosition, targetPosition);
+    }
+    setDraggedPosition(null);
+    setDragOverPosition(null);
+  };
+
+  const handleDragEnd = () => {
+    setDraggedPosition(null);
+    setDragOverPosition(null);
+  };
+
+  const handleDragAndDropSwap = (fromPos: number, toPos: number) => {
+    if (fromPos === toPos) return;
+
+    const itemAtFrom = heroConfig.pinned_items.find(p => p.position === fromPos);
+    const itemAtTo = heroConfig.pinned_items.find(p => p.position === toPos);
+
+    let updatedPins = [...heroConfig.pinned_items];
+
+    // Remove old references
+    updatedPins = updatedPins.filter(p => p.position !== fromPos && p.position !== toPos);
+
+    if (itemAtFrom) {
+      updatedPins.push({
+        ...itemAtFrom,
+        position: toPos
+      });
+    }
+
+    if (itemAtTo) {
+      updatedPins.push({
+        ...itemAtTo,
+        position: fromPos
+      });
+    }
+
+    updatedPins.sort((a, b) => a.position - b.position);
+
+    setHeroConfig(prev => ({
+      ...prev,
+      pinned_items: updatedPins
+    }));
+
+    addLog(`Reordered: swapped Slide #${fromPos} and Slide #${toPos} visually.`, "info");
+  };
+
+  // TMDB Proxy & Details client states
+  const [tmdbSearchQuery, setTmdbSearchQuery] = useState<string>("");
+  const [tmdbSearchResults, setTmdbSearchResults] = useState<any[]>([]);
+  const [tmdbSearchLoading, setTmdbSearchLoading] = useState<boolean>(false);
+  const [tmdbPinMode, setTmdbPinMode] = useState<"search" | "direct">("search");
+  const [lookupDramaResult, setLookupDramaResult] = useState<any | null>(null);
+  const [lookupLoading, setLookupLoading] = useState<boolean>(false);
+  const [resolvedDramas, setResolvedDramas] = useState<Record<string, any>>({});
+
+  const handleTmdbSearch = async (e?: React.FormEvent) => {
+    if (e) e.preventDefault();
+    if (!tmdbSearchQuery.trim()) return;
+    setTmdbSearchLoading(true);
+    addLog(`Searching shows matching "${tmdbSearchQuery}"...`, "info");
+    try {
+      const response = await fetch(`/api/tmdb/search?query=${encodeURIComponent(tmdbSearchQuery)}`);
+      const json = await response.json();
+      if (json.success && json.results) {
+        setTmdbSearchResults(json.results);
+        addLog(`Found ${json.results.length} results matching "${tmdbSearchQuery}". (Source: ${json.source})`, "success");
+      } else {
+        addLog(`No results found or search failed.`, "error");
+      }
+    } catch (err: any) {
+      addLog(`Search request failed: ${err.message}`, "error");
+    } finally {
+      setTmdbSearchLoading(false);
+    }
+  };
+
+  const handleTmdbLookup = async (idToLookup: string) => {
+    if (!idToLookup.trim()) return;
+    setLookupLoading(true);
+    setLookupDramaResult(null);
+    addLog(`Resolving details for TMDB ID: ${idToLookup}...`, "info");
+    try {
+      const response = await fetch(`/api/tmdb/details?id=${encodeURIComponent(idToLookup)}`);
+      if (!response.ok) {
+        throw new Error(`Server returned status ${response.status}`);
+      }
+      const contentType = response.headers.get("content-type");
+      if (!contentType || !contentType.includes("application/json")) {
+        throw new Error(`Expected JSON response but received: ${contentType}`);
+      }
+      const json = await response.json();
+      if (json.success && json.data) {
+        setLookupDramaResult(json.data);
+        addLog(`Successfully resolved: "${json.data.title}"`, "success");
+      } else {
+        addLog(`Could not resolve TMDB ID "${idToLookup}". Check the ID or try again.`, "error");
+      }
+    } catch (err: any) {
+      addLog(`Lookup request failed: ${err.message}`, "error");
+    } finally {
+      setLookupLoading(false);
+    }
+  };
+
+  const resolveDramaDetails = async (dramaId: string) => {
+    if (!dramaId) return;
+    if (resolvedDramas[dramaId]) return;
+    try {
+      const response = await fetch(`/api/tmdb/details?id=${encodeURIComponent(dramaId)}`);
+      if (!response.ok) {
+        throw new Error(`Server returned status ${response.status}`);
+      }
+      const contentType = response.headers.get("content-type");
+      if (!contentType || !contentType.includes("application/json")) {
+        throw new Error(`Expected JSON response but received: ${contentType}`);
+      }
+      const json = await response.json();
+      if (json.success && json.data) {
+        setResolvedDramas(prev => ({
+          ...prev,
+          [dramaId]: json.data
+        }));
+      }
+    } catch (err: any) {
+      console.error(`Failed to resolve details for ID: ${dramaId}`, err);
+    }
+  };
+  
   // Code templates
   const [selectedTemplateKey, setSelectedTemplateKey] = useState<string>("compose");
   const [copiedKey, setCopiedKey] = useState<string>("");
@@ -106,6 +303,24 @@ export default function App() {
   ]);
   const [aiLoading, setAiLoading] = useState<boolean>(false);
   const chatEndRef = useRef<HTMLDivElement>(null);
+
+  // Full Admin Panel Feature States
+  const [systemStats, setSystemStats] = useState<SystemStats | null>(null);
+  const [sandboxQueryType, setSandboxQueryType] = useState<string>("all");
+  const [sandboxSearch, setSandboxSearch] = useState<string>("");
+  const [sandboxResponse, setSandboxResponse] = useState<string>("");
+  const [sandboxLoading, setSandboxLoading] = useState<boolean>(false);
+  const [sandboxTime, setSandboxTime] = useState<number>(0);
+  const [snapshots, setSnapshots] = useState<LocalSnapshot[]>(() => {
+    try {
+      const saved = localStorage.getItem("hanzone_snapshots");
+      return saved ? JSON.parse(saved) : [];
+    } catch {
+      return [];
+    }
+  });
+  const [newSnapshotName, setNewSnapshotName] = useState<string>("");
+  const [trafficClientFilter, setTrafficClientFilter] = useState<string>("all");
 
   // Helper to add logs
   const addLog = (text: string, type: "info" | "success" | "error" = "info") => {
@@ -179,6 +394,153 @@ export default function App() {
     setLoading(false);
   };
 
+  // Load Hero Banner Configuration
+  const loadHeroConfig = async () => {
+    setHeroLoading(true);
+    addLog("Fetching dynamic Hero Banner configuration from server...", "info");
+    try {
+      const response = await fetch("/api/get-hero-config");
+      const json = await response.json();
+      if (json && json.hero_config) {
+        // Pre-populate resolvedDramas using existing nested drama objects!
+        const preResolved: Record<string, any> = {};
+        if (json.hero_config.pinned_items) {
+          json.hero_config.pinned_items.forEach((item: any) => {
+            if (item.drama) {
+              const dramaId = item.drama_id || (item.drama.slug && item.drama.slug.split("-")[1]) || item.drama.slug;
+              if (dramaId) {
+                preResolved[dramaId] = {
+                  id: dramaId,
+                  title: item.drama.title,
+                  type: item.drama.type || "tv",
+                  poster_path: item.drama.poster_url,
+                  backdrop_path: item.drama.backdrop_url,
+                  vote_average: item.drama.rating || 0.0,
+                  release_date: item.drama.year ? `${item.drama.year}-01-01` : "",
+                  overview: item.drama.overview || ""
+                };
+              }
+            }
+          });
+        }
+        setResolvedDramas(prev => ({ ...preResolved, ...prev }));
+        setHeroConfig(json.hero_config);
+        setInitialHeroConfig(JSON.parse(JSON.stringify(json.hero_config)));
+        addLog("Dynamic Hero Banner configuration successfully synchronized.", "success");
+      } else {
+        addLog("Failed to decode Hero Banner config from server response.", "error");
+      }
+    } catch (err: any) {
+      addLog(`Failed to load Hero Banner config: ${err.message}`, "error");
+    } finally {
+      setHeroLoading(false);
+    }
+  };
+
+  // Save/Commit Hero Banner Configuration
+  const saveHeroConfig = async (configToSave: HeroConfig = heroConfig) => {
+    setHeroSaving(true);
+    addLog("Committing dynamic Hero Banner configuration securely...", "info");
+    try {
+      const response = await fetch("/api/github/update-hero-config", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "x-admin-password": adminPassword
+        },
+        body: JSON.stringify({
+          hero_config: configToSave,
+          commitMessage: "Admin UI: Synchronized Hero Banner dynamic options"
+        })
+      });
+      const json = await response.json();
+      if (json.success) {
+        // Pre-populate resolvedDramas using newly returned nested drama objects!
+        const preResolved: Record<string, any> = {};
+        if (json.data && json.data.hero_config && json.data.hero_config.pinned_items) {
+          json.data.hero_config.pinned_items.forEach((item: any) => {
+            if (item.drama) {
+              const dramaId = item.drama_id || (item.drama.slug && item.drama.slug.split("-")[1]) || item.drama.slug;
+              if (dramaId) {
+                preResolved[dramaId] = {
+                  id: dramaId,
+                  title: item.drama.title,
+                  type: item.drama.type || "tv",
+                  poster_path: item.drama.poster_url,
+                  backdrop_path: item.drama.backdrop_url,
+                  vote_average: item.drama.rating || 0.0,
+                  release_date: item.drama.year ? `${item.drama.year}-01-01` : "",
+                  overview: item.drama.overview || ""
+                };
+              }
+            }
+          });
+        }
+        setResolvedDramas(prev => ({ ...preResolved, ...prev }));
+        setHeroConfig(json.data.hero_config);
+        setInitialHeroConfig(JSON.parse(JSON.stringify(json.data.hero_config)));
+        addLog("Successfully committed and deployed Hero Banner config!", "success");
+        return true;
+      } else {
+        addLog(`Failed to commit Hero Config: ${json.error}`, "error");
+        return false;
+      }
+    } catch (err: any) {
+      addLog(`Hero Config sync failed: ${err.message}`, "error");
+      return false;
+    } finally {
+      setHeroSaving(false);
+    }
+  };
+
+  // Sync Pinned Metadata from backend (forces fetch of latest ratings/posters from TMDB)
+  const syncHeroMetadata = async () => {
+    setHeroSyncing(true);
+    addLog("Initiating TMDB metadata synchronization for pinned hero items...", "info");
+    try {
+      const response = await fetch("/api/github/sync-hero-metadata", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "x-admin-password": adminPassword
+        }
+      });
+      const json = await response.json();
+      if (json.success) {
+        const preResolved: Record<string, any> = {};
+        if (json.data && json.data.hero_config && json.data.hero_config.pinned_items) {
+          json.data.hero_config.pinned_items.forEach((item: any) => {
+            if (item.drama) {
+              const dramaId = item.drama_id || (item.drama.slug && item.drama.slug.split("-")[1]) || item.drama.slug;
+              if (dramaId) {
+                preResolved[dramaId] = {
+                  id: dramaId,
+                  title: item.drama.title,
+                  type: item.drama.type || "tv",
+                  poster_path: item.drama.poster_url,
+                  backdrop_path: item.drama.backdrop_url,
+                  vote_average: item.drama.rating || 0.0,
+                  release_date: item.drama.year ? `${item.drama.year}-01-01` : "",
+                  overview: item.drama.overview || ""
+                };
+              }
+            }
+          });
+        }
+        setResolvedDramas(prev => ({ ...preResolved, ...prev }));
+        setHeroConfig(json.data.hero_config);
+        setInitialHeroConfig(JSON.parse(JSON.stringify(json.data.hero_config)));
+        addLog(json.message || "Successfully synchronized and updated pinned item metadata!", "success");
+      } else {
+        addLog(`Failed to sync hero metadata: ${json.error}`, "error");
+      }
+    } catch (err: any) {
+      addLog(`Sync request failed: ${err.message}`, "error");
+    } finally {
+      setHeroSyncing(false);
+    }
+  };
+
   // Login submission
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -215,6 +577,88 @@ export default function App() {
     setGenres([]);
   };
 
+  // Full Admin Panel Helper Functions
+  const fetchSystemStats = async () => {
+    try {
+      const response = await fetch("/api/system/stats");
+      const data = await response.json();
+      if (data.success) {
+        setSystemStats(data);
+      }
+    } catch (err: any) {
+      console.error("Failed to fetch system stats:", err);
+    }
+  };
+
+  const runApiSandboxTest = async () => {
+    setSandboxLoading(true);
+    const startTime = performance.now();
+    addLog(`Sandbox Test: Initiating GET request to /api/get-genres...`, "info");
+    try {
+      const response = await fetch("/api/get-genres");
+      const allGenres: Genre[] = await response.json();
+      
+      // Filter response based on sandbox criteria to simulate query params perfectly!
+      let filtered = [...allGenres];
+      if (sandboxQueryType === "genres") {
+        filtered = filtered.filter(g => g.type?.toLowerCase() === "genre");
+      } else if (sandboxQueryType === "keywords") {
+        filtered = filtered.filter(g => g.type?.toLowerCase() === "keyword");
+      }
+      if (sandboxSearch.trim()) {
+        filtered = filtered.filter(g => g.name.toLowerCase().includes(sandboxSearch.toLowerCase()));
+      }
+      
+      const duration = Math.round(performance.now() - startTime);
+      setSandboxTime(duration);
+      setSandboxResponse(JSON.stringify(filtered, null, 2));
+      addLog(`Sandbox Test Completed: 200 OK. Returned ${filtered.length} items in ${duration}ms`, "success");
+    } catch (err: any) {
+      setSandboxResponse(JSON.stringify({ error: err.message }, null, 2));
+      addLog(`Sandbox Test Failed: ${err.message}`, "error");
+    } finally {
+      setSandboxLoading(false);
+    }
+  };
+
+  const saveLocalSnapshot = () => {
+    if (!newSnapshotName.trim()) {
+      addLog("Snapshot name cannot be empty.", "error");
+      return;
+    }
+    const newSnap: LocalSnapshot = {
+      id: Math.random().toString(),
+      name: newSnapshotName.trim(),
+      timestamp: new Date().toLocaleString(),
+      genresCount: genres.length,
+      data: [...genres]
+    };
+    const updated = [newSnap, ...snapshots];
+    setSnapshots(updated);
+    localStorage.setItem("hanzone_snapshots", JSON.stringify(updated));
+    setNewSnapshotName("");
+    addLog(`Created local database snapshot '${newSnap.name}' with ${newSnap.genresCount} categories.`, "success");
+  };
+
+  const restoreLocalSnapshot = (snap: LocalSnapshot) => {
+    if (window.confirm(`Are you sure you want to restore snapshot '${snap.name}'? This will override your active dashboard state.`)) {
+      setGenres(snap.data);
+      if (snap.data.length > 0) {
+        selectGenreForEditing(snap.data[0]);
+      } else {
+        startAddMode();
+      }
+      addLog(`Restored dashboard state to snapshot '${snap.name}'. Click 'Go to Production CDN' or select category to commit back to Git repository.`, "info");
+    }
+  };
+
+  const deleteLocalSnapshot = (id: string, name: string) => {
+    const updated = snapshots.filter(s => s.id !== id);
+    setSnapshots(updated);
+    localStorage.setItem("hanzone_snapshots", JSON.stringify(updated));
+    addLog(`Deleted local snapshot '${name}'.`, "info");
+  };
+
   // Sync theme choices to body and local storage
   useEffect(() => {
     if (isDark) {
@@ -230,10 +674,18 @@ export default function App() {
     }
   }, [isDark]);
 
+  // Load system stats on tab change or auth
+  useEffect(() => {
+    if (isAuthenticated) {
+      fetchSystemStats();
+    }
+  }, [isAuthenticated, activeTab]);
+
   // Initialize/Reload data when authenticated
   useEffect(() => {
     if (isAuthenticated) {
       loadData();
+      loadHeroConfig();
     }
   }, [isAuthenticated]);
 
@@ -258,6 +710,22 @@ export default function App() {
   useEffect(() => {
     setQuickImageError(false);
   }, [quickBgUrl]);
+
+  // Resolve TMDB details for all pinned items whenever the list of pinned items changes
+  useEffect(() => {
+    if (heroConfig && heroConfig.pinned_items) {
+      heroConfig.pinned_items.forEach((item) => {
+        if (item.drama_id) {
+          resolveDramaDetails(item.drama_id);
+        }
+      });
+    }
+  }, [heroConfig.pinned_items]);
+
+  // Reset pending unpin modal on tab change or logout
+  useEffect(() => {
+    setPendingUnpin(null);
+  }, [activeTab, isAuthenticated]);
 
   // Sync scroll on chat
   useEffect(() => {
@@ -665,80 +1133,388 @@ export default function App() {
       <div className="flex-1 flex overflow-hidden">
         
         {/* Sidebar */}
-        <aside id="sidebar" className={`w-72 transition-colors duration-300 border-r p-6 flex flex-col gap-6 overflow-y-auto shrink-0 ${
+        <aside id="sidebar" className={`w-72 transition-colors duration-300 border-r p-5 flex flex-col gap-6 overflow-y-auto shrink-0 ${
           isDark ? "bg-[#0d1326] border-[#1e2942]" : "bg-white border-slate-200"
         }`}>
-          <div>
-            <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-3">API Data Connection</p>
-            
-            <div className={`flex items-center gap-2 px-3 py-2 border rounded-lg transition-colors duration-300 ${
-              isDark 
-                ? "bg-indigo-950/40 border-indigo-900/40 text-indigo-200" 
-                : "bg-indigo-50 border-indigo-100 text-indigo-900"
-            }`}>
-              <Settings2 className={`w-4 h-4 ${isDark ? "text-indigo-400" : "text-indigo-600"}`} />
-              <span className="text-xs font-bold">GitHub Repository Integration</span>
-            </div>
-            
-            <p className="text-[11px] text-slate-400 mt-2 italic">
-              Commits JSON changes in real-time to your custom public GitHub repository.
-            </p>
-          </div>
+          {/* Section: Navigation Menu */}
+          <div className="flex-1 flex flex-col gap-5">
+            <div>
+              <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-2.5 px-2">Navigation Menu</p>
+              <div className="space-y-1">
+                <button
+                  onClick={() => setActiveTab("overview")}
+                  className={`w-full flex items-center justify-between px-3.5 py-2.5 rounded-xl text-xs font-bold transition-all duration-300 ${
+                    activeTab === "overview"
+                      ? "bg-indigo-600 text-white shadow-md shadow-indigo-600/10"
+                      : isDark
+                        ? "text-slate-400 hover:text-slate-200 hover:bg-slate-800/50"
+                        : "text-slate-600 hover:text-slate-900 hover:bg-slate-100"
+                  }`}
+                >
+                  <div className="flex items-center gap-2.5">
+                    <LayoutDashboard className="w-4 h-4" />
+                    <span>Dashboard Overview</span>
+                  </div>
+                </button>
 
-          {/* GitHub configuration details */}
-          <div className={`flex flex-col gap-3 p-4 border rounded-xl transition-all duration-300 ${
-            isDark ? "bg-[#121b33] border-[#1e2942]" : "bg-slate-50 border-slate-100"
-          }`}>
-            <div className="flex items-center gap-2 text-rose-600 font-bold text-xs uppercase">
-              <Github className="w-4 h-4" />
-              Production CDN Config
-            </div>
-            
-            <div className={`text-[11px] transition-colors duration-300 space-y-2 ${isDark ? "text-slate-300" : "text-slate-500"}`}>
-              <p>
-                GitHub parameters are now <span className="font-semibold text-emerald-500">securely stored on the backend</span> to protect secrets.
-              </p>
-              <div className={`border-t pt-2 space-y-1 font-mono text-[10px] transition-colors duration-300 ${isDark ? "border-[#1e2942]" : "border-slate-200/60"}`}>
-                <div className="flex justify-between">
-                  <span className="text-slate-400">Owner:</span>
-                  <span className={`font-bold ${isDark ? "text-slate-200" : "text-slate-700"}`}>Configured</span>
-                </div>
-                <div className="flex justify-between">
-                  <span className="text-slate-400">Repository:</span>
-                  <span className={`font-bold ${isDark ? "text-slate-200" : "text-slate-700"}`}>Configured</span>
-                </div>
-                <div className="flex justify-between">
-                  <span className="text-slate-400">File Path:</span>
-                  <span className={`font-bold ${isDark ? "text-slate-200" : "text-slate-700"}`}>Configured</span>
-                </div>
-                <div className="flex justify-between">
-                  <span className="text-slate-400">Branch:</span>
-                  <span className={`font-bold ${isDark ? "text-slate-200" : "text-slate-700"}`}>Configured</span>
-                </div>
+                <button
+                  onClick={() => setActiveTab("genres")}
+                  className={`w-full flex items-center justify-between px-3.5 py-2.5 rounded-xl text-xs font-bold transition-all duration-300 ${
+                    activeTab === "genres"
+                      ? "bg-indigo-600 text-white shadow-md shadow-indigo-600/10"
+                      : isDark
+                        ? "text-slate-400 hover:text-slate-200 hover:bg-slate-800/50"
+                        : "text-slate-600 hover:text-slate-900 hover:bg-slate-100"
+                  }`}
+                >
+                  <div className="flex items-center gap-2.5">
+                    <Layers className="w-4 h-4" />
+                    <span>Genres & Keywords</span>
+                  </div>
+                  <span className={`text-[9px] font-bold px-2 py-0.5 rounded-full ${
+                    activeTab === "genres"
+                      ? "bg-indigo-700 text-white"
+                      : isDark
+                        ? "bg-[#16203a] text-indigo-400"
+                        : "bg-indigo-50 text-indigo-600"
+                  }`}>
+                    {genres.length}
+                  </span>
+                </button>
+
+                <button
+                  onClick={() => setActiveTab("hero")}
+                  className={`w-full flex items-center justify-between px-3.5 py-2.5 rounded-xl text-xs font-bold transition-all duration-300 ${
+                    activeTab === "hero"
+                      ? "bg-indigo-600 text-white shadow-md shadow-indigo-600/10"
+                      : isDark
+                        ? "text-slate-400 hover:text-slate-200 hover:bg-slate-800/50"
+                        : "text-slate-600 hover:text-slate-900 hover:bg-slate-100"
+                  }`}
+                >
+                  <div className="flex items-center gap-2.5">
+                    <Tv className="w-4 h-4" />
+                    <span>Hero Banner Pager</span>
+                  </div>
+                  <span className={`text-[9px] font-bold px-2 py-0.5 rounded-full ${
+                    activeTab === "hero"
+                      ? "bg-indigo-700 text-white"
+                      : isDark
+                        ? "bg-[#16203a] text-indigo-400"
+                        : "bg-indigo-50 text-indigo-600"
+                  }`}>
+                    {heroConfig.mode}
+                  </span>
+                </button>
+
+                <button
+                  onClick={() => setActiveTab("cdn")}
+                  className={`w-full flex items-center justify-between px-3.5 py-2.5 rounded-xl text-xs font-bold transition-all duration-300 ${
+                    activeTab === "cdn"
+                      ? "bg-indigo-600 text-white shadow-md shadow-indigo-600/10"
+                      : isDark
+                        ? "text-slate-400 hover:text-slate-200 hover:bg-slate-800/50"
+                        : "text-slate-600 hover:text-slate-900 hover:bg-slate-100"
+                  }`}
+                >
+                  <div className="flex items-center gap-2.5">
+                    <GitBranch className="w-4 h-4" />
+                    <span>Production CDN</span>
+                  </div>
+                </button>
+
+                <button
+                  onClick={() => setActiveTab("users")}
+                  className={`w-full flex items-center justify-between px-3.5 py-2.5 rounded-xl text-xs font-bold transition-all duration-300 ${
+                    activeTab === "users"
+                      ? "bg-indigo-600 text-white shadow-md"
+                      : isDark
+                        ? "text-slate-500 hover:text-slate-400"
+                        : "text-slate-400 hover:text-slate-500"
+                  }`}
+                >
+                  <div className="flex items-center gap-2.5">
+                    <Users className="w-4 h-4" />
+                    <span>Users & Accounts</span>
+                  </div>
+                  <span className="text-[8px] font-black uppercase px-1.5 py-0.5 rounded bg-slate-500/10 text-slate-400">Soon</span>
+                </button>
+
+                <button
+                  onClick={() => setActiveTab("logs")}
+                  className={`w-full flex items-center justify-between px-3.5 py-2.5 rounded-xl text-xs font-bold transition-all duration-300 ${
+                    activeTab === "logs"
+                      ? "bg-indigo-600 text-white shadow-md shadow-indigo-600/10"
+                      : isDark
+                        ? "text-slate-400 hover:text-slate-200 hover:bg-slate-800/50"
+                        : "text-slate-600 hover:text-slate-900 hover:bg-slate-100"
+                  }`}
+                >
+                  <div className="flex items-center gap-2.5">
+                    <Terminal className="w-4 h-4" />
+                    <span>System Live Logs</span>
+                  </div>
+                  <span className="animate-pulse w-1.5 h-1.5 rounded-full bg-emerald-500 mr-1" />
+                </button>
               </div>
             </div>
 
-            <button 
-              id="btn-fetch-github"
-              onClick={() => loadData()}
-              disabled={loading}
-              className="w-full mt-2 py-1.5 bg-rose-600 hover:bg-rose-700 text-white font-bold rounded-lg text-xs flex items-center justify-center gap-1.5 disabled:opacity-50 transition-colors"
-            >
-              <RefreshCw className={`w-3.5 h-3.5 ${loading ? "animate-spin" : ""}`} />
-              Reload Production Data
-            </button>
+            {/* Quick API status status indicator inside sidebar */}
+            <div className={`p-4 border rounded-xl flex flex-col gap-2.5 transition-all duration-300 ${
+              isDark ? "bg-[#121b33] border-[#1e2942]" : "bg-slate-50 border-slate-100"
+            }`}>
+              <div className="flex items-center gap-2 text-[10px] font-bold text-slate-400 uppercase tracking-wider">
+                <Activity className="w-3.5 h-3.5 text-indigo-400" />
+                Live Hub Status
+              </div>
+              <div className="space-y-1.5 text-[11px]">
+                <div className="flex justify-between items-center">
+                  <span className="text-slate-400">Backend API</span>
+                  <span className="font-bold text-emerald-500 flex items-center gap-1">
+                    <span className="w-1.5 h-1.5 rounded-full bg-emerald-500" />
+                    Online
+                  </span>
+                </div>
+                <div className="flex justify-between items-center">
+                  <span className="text-slate-400">GitHub CDN</span>
+                  <span className="font-bold text-emerald-500">Connected</span>
+                </div>
+              </div>
+            </div>
           </div>
 
+          {/* Sidebar Footer with user info & logout */}
+          <div className={`pt-4 border-t flex flex-col gap-3 transition-colors duration-300 ${
+            isDark ? "border-[#1e2942]" : "border-slate-100"
+          }`}>
+            <div className="flex items-center gap-2.5 px-2">
+              <div className="w-7.5 h-7.5 bg-rose-600 rounded-lg flex items-center justify-center text-white font-extrabold text-xs shrink-0">
+                U
+              </div>
+              <div className="min-w-0 flex-1">
+                <p className={`text-xs font-bold truncate ${isDark ? "text-slate-200" : "text-slate-800"}`}>cjtggg10@gmail.com</p>
+                <p className="text-[9px] font-medium text-slate-400 uppercase">Administrator</p>
+              </div>
+            </div>
+
+            <button
+              onClick={() => {
+                sessionStorage.removeItem("admin_authenticated");
+                window.location.reload();
+              }}
+              className={`w-full flex items-center justify-center gap-2 px-3 py-2 rounded-xl text-xs font-bold transition-all border active:scale-[0.98] ${
+                isDark
+                  ? "bg-transparent border-slate-700 text-red-400 hover:bg-red-500/10 hover:border-red-500/20"
+                  : "bg-white border-slate-200 text-red-500 hover:bg-red-50 hover:border-red-200"
+              }`}
+            >
+              <LogOut className="w-3.5 h-3.5" />
+              Sign Out Securely
+            </button>
+          </div>
         </aside>
 
         {/* Dashboard Panels */}
         <main id="main-content" className="flex-1 flex flex-col p-6 overflow-hidden gap-6">
           
-          {/* Top segment: Grid of Edit tools and Interactive Android Mockup */}
-          <div className="flex-1 flex flex-col min-h-0">
-            
-            {/* Main Category Grid Workspace */}
-            <section className="flex-1 flex flex-col gap-5 overflow-hidden pb-4">
+          {/* OVERVIEW SECTION */}
+          {activeTab === "overview" && (
+            <div className="flex-1 flex flex-col gap-6 overflow-y-auto pr-1 pb-6">
+              {/* Elegant Welcome Banner */}
+              <div className={`relative overflow-hidden rounded-2xl p-6 border transition-all duration-300 ${
+                isDark 
+                  ? "bg-gradient-to-r from-[#0d152c] to-[#070b16] border-[#1e2d4d]" 
+                  : "bg-gradient-to-r from-indigo-50/60 to-white border-indigo-100 shadow-sm"
+              }`}>
+                <div className="absolute top-0 right-0 p-8 opacity-10 pointer-events-none">
+                  <Sparkles className="w-40 h-40 text-indigo-400 animate-pulse" />
+                </div>
+                <div className="relative z-10 flex flex-col gap-2">
+                  <span className={`text-[10px] font-black uppercase tracking-widest px-2.5 py-1 rounded-full w-max ${
+                    isDark ? "bg-indigo-500/10 text-indigo-400" : "bg-indigo-50 text-indigo-700"
+                  }`}>
+                    HanZone Server Workspace
+                  </span>
+                  <h1 className={`text-2xl font-black tracking-tight ${isDark ? "text-white" : "text-slate-900"}`}>
+                    System Control Tower
+                  </h1>
+                  <p className={`text-xs max-w-xl leading-relaxed ${isDark ? "text-slate-400" : "text-slate-500"}`}>
+                    Monitor real-time server diagnostics, verify GitHub repository synchronizations, and access application integration routes to serve discovery assets to your client devices.
+                  </p>
+                </div>
+              </div>
+
+              {/* Two Column Layout for Real Admin Panel Controls & Integration */}
+              <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+                
+                {/* Column 1: System Health & Diagnostics */}
+                <div className={`rounded-2xl p-6 border transition-all duration-300 flex flex-col gap-5 ${
+                  isDark ? "bg-[#0c1224] border-[#1e2942]" : "bg-white border-slate-200 shadow-sm"
+                }`}>
+                  <div className="border-b pb-3.5 border-slate-700/15">
+                    <h3 className={`font-black uppercase tracking-wider text-[11px] flex items-center gap-2 ${
+                      isDark ? "text-slate-200" : "text-slate-800"
+                    }`}>
+                      <Server className="w-4 h-4 text-indigo-500 animate-pulse" />
+                      Server Runtime & Diagnostics
+                    </h3>
+                    <p className="text-[10px] text-slate-500 mt-1">Live configuration secrets, repository status, and server state.</p>
+                  </div>
+
+                  <div className="space-y-4 flex-1">
+                    {/* Status item: Host Process */}
+                    <div className="flex items-center justify-between text-xs">
+                      <span className="font-semibold text-slate-400 flex items-center gap-2">
+                        <Activity className="w-3.5 h-3.5 text-slate-400" />
+                        Host API Status
+                      </span>
+                      <span className="font-bold text-emerald-500 flex items-center gap-1.5 uppercase tracking-wider text-[10px]">
+                        <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
+                        Active & Healthy
+                      </span>
+                    </div>
+
+                    {/* Status item: Secret keys */}
+                    <div className="flex items-center justify-between text-xs">
+                      <span className="font-semibold text-slate-400 flex items-center gap-2">
+                        <Shield className="w-3.5 h-3.5 text-slate-400" />
+                        Security Credentials
+                      </span>
+                      <span className="font-bold text-emerald-500 flex items-center gap-1.5 uppercase tracking-wider text-[10px]">
+                        <CheckCircle className="w-3.5 h-3.5" />
+                        Verified Loaded
+                      </span>
+                    </div>
+
+                    {/* Status item: CDN link */}
+                    <div className="flex items-center justify-between text-xs">
+                      <span className="font-semibold text-slate-400 flex items-center gap-2">
+                        <GitBranch className="w-3.5 h-3.5 text-slate-400" />
+                        GitHub Sync Link
+                      </span>
+                      {systemStats?.githubConfigured ? (
+                        <span className="font-bold text-emerald-500 flex items-center gap-1 uppercase tracking-wider text-[10px]">
+                          <CheckCircle className="w-3.5 h-3.5" /> Bound Repository
+                        </span>
+                      ) : (
+                        <span className="font-bold text-amber-500 flex items-center gap-1 uppercase tracking-wider text-[10px]">
+                          <AlertTriangle className="w-3.5 h-3.5" /> Local Fallback Mode
+                        </span>
+                      )}
+                    </div>
+
+                    {/* Diagnostic details card if offline */}
+                    {systemStats && !systemStats.githubConfigured && (
+                      <div className={`p-4 rounded-xl border text-[11px] leading-relaxed mt-2 ${
+                        isDark ? "bg-[#11192e] border-amber-950/40 text-amber-300/90" : "bg-amber-50/50 border-amber-200 text-amber-800"
+                      }`}>
+                        <p className="font-extrabold mb-1">💡 Offline-Local Storage Active</p>
+                        <p>We are reading/writing from local <code className="font-mono bg-amber-500/10 px-1 rounded">genres.json</code> files. To activate live GitHub commits, add <code className="font-mono">GITHUB_TOKEN</code> to your Secrets tab in AI Studio settings.</p>
+                      </div>
+                    )}
+
+                    {/* Bound configs display if online */}
+                    {systemStats && systemStats.githubConfigured && (
+                      <div className={`p-4 rounded-xl border text-[11px] space-y-2 mt-2 ${
+                        isDark ? "bg-[#060a15] border-[#131d33] text-indigo-300" : "bg-slate-50 border-slate-200 text-slate-700"
+                      }`}>
+                        <div className="flex justify-between"><span className="text-slate-500">Target Repository:</span> <span className="font-bold truncate max-w-[180px]">{systemStats.owner}/{systemStats.repo}</span></div>
+                        <div className="flex justify-between"><span className="text-slate-500">Target Branch:</span> <span className="font-bold font-mono">{systemStats.branch}</span></div>
+                        <div className="flex justify-between"><span className="text-slate-500">Asset File Path:</span> <span className="font-bold font-mono truncate max-w-[180px]">{systemStats.filePath}</span></div>
+                      </div>
+                    )}
+                  </div>
+
+                  <div className="pt-3.5 border-t border-slate-700/15">
+                    <button 
+                      onClick={() => setShowSetupGuide(true)}
+                      className="w-full py-2.5 bg-indigo-500/10 hover:bg-indigo-500/15 text-indigo-400 font-bold rounded-xl transition-all text-xs border border-indigo-500/10"
+                    >
+                      Open Developer Integration Guide
+                    </button>
+                  </div>
+                </div>
+
+                {/* Column 2: App Integration Hub */}
+                <div className="flex flex-col gap-6">
+                  
+                  {/* Clean App Integration Route Card */}
+                  <div className={`rounded-2xl p-6 border shadow-sm transition-all duration-300 ${
+                    isDark ? "bg-[#0c1224] border-[#1e2942]" : "bg-white border-slate-200"
+                  }`}>
+                    <div className="border-b pb-3.5 mb-4 border-slate-700/15 flex items-center justify-between">
+                      <h3 className={`font-black uppercase tracking-wider text-[11px] flex items-center gap-2 ${
+                        isDark ? "text-slate-200" : "text-slate-700"
+                      }`}>
+                        <Globe className="w-4 h-4 text-indigo-500" />
+                        App Integration Route
+                      </h3>
+                      <span className="px-2 py-0.5 rounded text-[9px] font-black uppercase bg-emerald-500/10 text-emerald-500 border border-emerald-500/20">
+                        GET Method
+                      </span>
+                    </div>
+
+                    <p className={`text-xs leading-relaxed mb-4 ${isDark ? "text-slate-400" : "text-slate-500"}`}>
+                      Provide this secure, live cache-busting JSON feed to your application developers to instantly populate the mobile application or client discovery views.
+                    </p>
+
+                    <div className="space-y-3.5">
+                      <div className="flex flex-col gap-1.5">
+                        <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Dynamic Feed URL</span>
+                        <div className={`p-3.5 rounded-xl border font-mono text-xs flex items-center justify-between transition-all overflow-hidden ${
+                          isDark ? "bg-[#060a15] border-[#131d33] text-indigo-300" : "bg-slate-50 border-slate-200 text-slate-700"
+                        }`}>
+                          <span className="truncate mr-3 select-all">{window.location.origin}/api/get-genres</span>
+                          <button
+                            onClick={() => copyToClipboard(window.location.origin + "/api/get-genres", "get-genres")}
+                            className={`p-1.5 rounded-lg hover:bg-indigo-500/10 transition-all shrink-0 text-slate-400 hover:text-indigo-500`}
+                            title="Copy Feed URL"
+                          >
+                            {copiedKey === "get-genres" ? (
+                              <span className="text-[10px] font-bold text-emerald-500 font-sans">Copied!</span>
+                            ) : (
+                              <Copy className="w-4 h-4" />
+                            )}
+                          </button>
+                        </div>
+                      </div>
+
+                      {/* Clean cURL Block */}
+                      <div className="flex flex-col gap-1.5">
+                        <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Verify via Terminal (cURL)</span>
+                        <div className={`p-3.5 rounded-xl border font-mono text-xs flex items-center justify-between ${
+                          isDark ? "bg-[#03060f] border-[#131d33] text-slate-300" : "bg-slate-900 border-slate-950 text-slate-300"
+                        }`}>
+                          <span className="truncate select-all mr-3">curl -s "{window.location.origin}/api/get-genres"</span>
+                          <button
+                            onClick={() => copyToClipboard(`curl -s "${window.location.origin}/api/get-genres"`, "curl")}
+                            className="p-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-400 hover:text-white transition-all shrink-0"
+                            title="Copy cURL Command"
+                          >
+                            {copiedKey === "curl" ? (
+                              <span className="text-[10px] font-bold text-emerald-400 font-sans">Copied!</span>
+                            ) : (
+                              <Copy className="w-3.5 h-3.5" />
+                            )}
+                          </button>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+
+
+                </div>
+
+              </div>
+            </div>
+          )}
+
+          {/* GENRES SECTION */}
+          {activeTab === "genres" && (
+            <div className="flex-1 flex flex-col min-h-0">
+              
+              {/* Main Category Grid Workspace */}
+              <section className="flex-1 flex flex-col gap-5 overflow-hidden pb-4">
               
               {/* Header and Visual Search Bar */}
               <div className="flex flex-col gap-3 shrink-0">
@@ -1011,42 +1787,7 @@ export default function App() {
                 )}
               </div>
 
-              {/* Collapsible/Sleek Process Console at the Bottom */}
-              <div className={`rounded-2xl p-4 flex flex-col font-mono text-[10px] min-h-[120px] max-h-[140px] border shadow-sm transition-all duration-300 shrink-0 ${
-                isDark 
-                  ? "bg-[#060a15] border-[#131d33] text-indigo-200" 
-                  : "bg-slate-900 border-slate-950 text-slate-300"
-              }`}>
-                <div className="flex items-center justify-between border-b border-slate-800 pb-1.5 mb-1.5 font-bold shrink-0">
-                  <span className="flex items-center gap-1 text-slate-300 uppercase tracking-wider text-[11px]">
-                    <Code className="w-3.5 h-3.5 text-indigo-400" />
-                    Live Repository Console
-                  </span>
-                  <button 
-                    onClick={() => setStatusLogs([])}
-                    className="text-slate-500 hover:text-slate-300 text-[9px] hover:underline transition-colors"
-                  >
-                    Clear Feed
-                  </button>
-                </div>
-                <div className="flex-1 overflow-y-auto space-y-1 pr-1">
-                  {statusLogs.length === 0 ? (
-                    <div className="text-slate-600 text-center py-4 italic">Feed is empty. Complete saves, deletions, or data reloads to log secure GitHub CDN branch operations.</div>
-                  ) : (
-                    statusLogs.map((log, index) => (
-                      <div key={index} className="flex gap-2 items-start leading-relaxed text-left">
-                        <span className="text-slate-600 shrink-0 font-bold">[{log.time}]</span>
-                        <span className={
-                          log.type === "success" ? "text-emerald-400 font-bold" :
-                          log.type === "error" ? "text-red-400 font-bold" : "text-indigo-300"
-                        }>
-                          {log.text}
-                        </span>
-                      </div>
-                    ))
-                  )}
-                </div>
-              </div>
+
 
               {/* Premium Glassmorphism Edit Modal Drawer overlay */}
               {isEditModalOpen && (
@@ -1267,11 +2008,1002 @@ export default function App() {
               )}
 
             </section>
-
           </div>
+        )}
 
-        </main>
+        {/* HERO BANNER SECTION */}
+        {activeTab === "hero" && (
+          <div className="flex-1 flex flex-col gap-6 overflow-y-auto pr-1">
+            <header className="flex flex-col gap-2 text-left">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+                <div>
+                  <h1 className="text-2xl font-black tracking-tight flex items-center gap-2">
+                    <Tv className="w-6 h-6 text-indigo-500 animate-pulse" />
+                    Hero Banner Pager
+                  </h1>
+                  <p className="text-xs text-slate-400 mt-0.5">
+                    Configure the dynamic hero slider, set auto/manual curate modes, and pin specific dramas to positions.
+                  </p>
+                </div>
+                
+                {/* Sync Actions */}
+                <div className="flex items-center gap-2 flex-wrap">
+                  <button
+                    onClick={() => loadHeroConfig()}
+                    disabled={heroLoading || heroSaving || heroSyncing}
+                    className={`h-9 px-4 rounded-xl text-xs font-bold transition-all duration-300 flex items-center gap-1.5 border ${
+                      isDark 
+                        ? "bg-[#11192e] border-[#1e2942] hover:bg-[#1c294a] text-slate-200" 
+                        : "bg-white border-slate-200 hover:bg-slate-50 text-slate-700 shadow-sm"
+                    }`}
+                  >
+                    <RefreshCw className={`w-3.5 h-3.5 ${heroLoading ? "animate-spin" : ""}`} />
+                    Refresh Config
+                  </button>
+                  <button
+                    onClick={() => syncHeroMetadata()}
+                    disabled={heroLoading || heroSaving || heroSyncing}
+                    className={`h-9 px-4 rounded-xl text-xs font-bold transition-all duration-300 flex items-center gap-1.5 border ${
+                      isDark 
+                        ? "bg-[#1b1c1e] border-[#312a1d] hover:bg-[#2b2518] text-amber-400" 
+                        : "bg-amber-50 border-amber-200 hover:bg-amber-100 text-amber-800 shadow-sm"
+                    }`}
+                    title="Force refresh and synchronize of TMDb ratings, titles, and poster metadata for all pinned dramas"
+                  >
+                    <RefreshCw className={`w-3.5 h-3.5 ${heroSyncing ? "animate-spin" : ""}`} />
+                    {heroSyncing ? "Syncing Metadata..." : "Sync Pinned Metadata"}
+                  </button>
+                  <button
+                    onClick={() => saveHeroConfig()}
+                    disabled={heroLoading || heroSaving || heroSyncing}
+                    className="h-9 px-4 rounded-xl text-xs font-bold text-white bg-indigo-600 hover:bg-indigo-500 transition-all duration-300 shadow-md shadow-indigo-600/15 flex items-center gap-1.5 active:scale-95 disabled:opacity-50"
+                  >
+                    <Save className="w-3.5 h-3.5" />
+                    {heroSaving ? "Deploying..." : "Save & Commit"}
+                  </button>
+                </div>
+              </div>
+            </header>
+
+            {/* Dashboard Workspace */}
+            <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+              
+              {/* Left Column: Form Controls */}
+              <div className="lg:col-span-1 flex flex-col gap-6">
+                
+                {/* Mode & Limits Card */}
+                <div className={`rounded-2xl p-5 border shadow-sm flex flex-col gap-5 text-left transition-colors duration-300 ${
+                  isDark ? "bg-[#0c1224] border-[#1e2942]" : "bg-white border-slate-200"
+                }`}>
+                  <div className="flex items-center gap-2 pb-3 border-b transition-colors duration-300 border-[#1e2942]/10 dark:border-slate-700/20">
+                    <Sliders className="w-4.5 h-4.5 text-indigo-400" />
+                    <h2 className="text-sm font-bold tracking-tight">Banner Strategy</h2>
+                  </div>
+
+                  {/* Mode Selector */}
+                  <div className="flex flex-col gap-2">
+                    <label className="text-[10px] font-extrabold text-slate-400 uppercase tracking-wider">
+                      Banner Selection Mode
+                    </label>
+                    <div className="grid grid-cols-3 gap-1.5">
+                      {(["AUTO", "MANUAL", "HYBRID"] as const).map((m) => (
+                        <button
+                          key={m}
+                          onClick={() => setHeroConfig(prev => ({ ...prev, mode: m }))}
+                          className={`py-2 rounded-lg text-[11px] font-bold border transition-all ${
+                            heroConfig.mode === m
+                              ? "bg-indigo-600 text-white border-indigo-600 shadow-sm"
+                              : isDark
+                                ? "bg-[#11192e] border-[#1e2942] text-slate-400 hover:bg-[#1a2544] hover:text-slate-200"
+                                : "bg-slate-50 border-slate-200 text-slate-600 hover:bg-slate-100 hover:text-slate-900"
+                          }`}
+                        >
+                          {m}
+                        </button>
+                      ))}
+                    </div>
+                    <p className="text-[10px] text-slate-400 mt-1 leading-relaxed">
+                      {heroConfig.mode === "AUTO" && "AUTO Mode: The app automatically pulls top-rated, popular, or trending dramas dynamically."}
+                      {heroConfig.mode === "MANUAL" && "MANUAL Mode: The hero banner slider is fully curated using your pinned items."}
+                      {heroConfig.mode === "HYBRID" && "HYBRID Mode: Mix of pinned items at set slots (e.g. pin to slide 1) and dynamic fill for the rest."}
+                    </p>
+                  </div>
+
+                  {/* Max Items Field */}
+                  <div className="flex flex-col gap-1.5">
+                    <div className="flex justify-between items-center">
+                      <label className="text-[10px] font-extrabold text-slate-400 uppercase tracking-wider">
+                        Max Slide Items
+                      </label>
+                      <span className="text-[11px] font-mono font-bold text-indigo-400">
+                        {heroConfig.max_items} Dramas
+                      </span>
+                    </div>
+                    <input
+                      type="range"
+                      min={3}
+                      max={12}
+                      step={1}
+                      value={heroConfig.max_items}
+                      onChange={(e) => setHeroConfig(prev => ({ ...prev, max_items: parseInt(e.target.value, 10) }))}
+                      className="w-full accent-indigo-600 h-1.5 rounded-lg bg-slate-700 cursor-pointer"
+                    />
+                    <div className="flex justify-between text-[9px] text-slate-500 font-bold font-mono">
+                      <span>Min: 3</span>
+                      <span>Max: 12</span>
+                    </div>
+                  </div>
+
+                  {/* Auto-Fill Source Fallback Selector */}
+                  <div className="flex flex-col gap-1.5">
+                    <label className="text-[10px] font-extrabold text-slate-400 uppercase tracking-wider">
+                      Auto-Fill Content Source
+                    </label>
+                    <select
+                      value={heroConfig.auto_source}
+                      onChange={(e) => setHeroConfig(prev => ({ ...prev, auto_source: e.target.value as any }))}
+                      className={`w-full h-9 px-3 rounded-xl focus:outline-none focus:ring-2 focus:ring-indigo-500 text-xs transition-colors duration-300 border ${
+                        isDark 
+                          ? "bg-[#11192e] border-[#1e2942] text-slate-100" 
+                          : "bg-slate-50 border-slate-200 text-slate-700"
+                      }`}
+                    >
+                      <option value="popular">Popular / Top-Rated (Dramas)</option>
+                      <option value="trending">Trending Today</option>
+                      <option value="latest">Latest Released</option>
+                    </select>
+                    <p className="text-[9px] text-slate-500 leading-relaxed">
+                      This fallback query runs when auto-populating unpinned slots in hybrid/auto modes.
+                    </p>
+                  </div>
+                </div>
+
+                {/* Add Pinning Form Card */}
+                {heroConfig.mode !== "AUTO" && (
+                  <div className={`rounded-2xl p-5 border shadow-sm flex flex-col gap-4 text-left transition-colors duration-300 ${
+                    isDark ? "bg-[#0c1224] border-[#1e2942]" : "bg-white border-slate-200"
+                  }`}>
+                    <div className="flex items-center justify-between pb-3 border-b transition-colors duration-300 border-[#1e2942]/10 dark:border-slate-700/20">
+                      <div className="flex items-center gap-2">
+                        <Pin className="w-4.5 h-4.5 text-indigo-400 rotate-45" />
+                        <h2 className="text-sm font-bold tracking-tight">Pin Drama Pager</h2>
+                      </div>
+                      
+                      {/* Inner Tabs */}
+                      <div className="flex bg-slate-100 dark:bg-slate-800 p-0.5 rounded-lg border border-slate-200/50 dark:border-slate-700/30">
+                        <button
+                          onClick={() => setTmdbPinMode("search")}
+                          className={`px-2.5 py-1 rounded-md text-[10px] font-bold transition-all ${
+                            tmdbPinMode === "search"
+                              ? "bg-white dark:bg-slate-700 text-indigo-600 dark:text-slate-100 shadow-sm"
+                              : "text-slate-500 hover:text-slate-700 dark:text-slate-400 dark:hover:text-slate-200"
+                          }`}
+                        >
+                          Search
+                        </button>
+                        <button
+                          onClick={() => setTmdbPinMode("direct")}
+                          className={`px-2.5 py-1 rounded-md text-[10px] font-bold transition-all ${
+                            tmdbPinMode === "direct"
+                              ? "bg-white dark:bg-slate-700 text-indigo-600 dark:text-slate-100 shadow-sm"
+                              : "text-slate-500 hover:text-slate-700 dark:text-slate-400 dark:hover:text-slate-200"
+                          }`}
+                        >
+                          ID Lookup
+                        </button>
+                      </div>
+                    </div>
+
+                    {tmdbPinMode === "search" ? (
+                      <div className="flex flex-col gap-3">
+                        {/* Search Input Form */}
+                        <form onSubmit={handleTmdbSearch} className="flex gap-2">
+                          <div className="relative flex-1">
+                            <Search className="w-3.5 h-3.5 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
+                            <input
+                              type="text"
+                              value={tmdbSearchQuery}
+                              onChange={(e) => setTmdbSearchQuery(e.target.value)}
+                              placeholder="Search drama by name (e.g. Vincenzo)..."
+                              className={`w-full h-9 pl-9 pr-3 rounded-xl focus:outline-none focus:ring-2 focus:ring-indigo-500 text-xs transition-colors duration-300 border ${
+                                isDark 
+                                  ? "bg-[#11192e] border-[#1e2942] text-slate-100 placeholder-slate-500" 
+                                  : "bg-slate-50 border-slate-200 text-slate-700 placeholder-slate-400"
+                              }`}
+                            />
+                          </div>
+                          <button
+                            type="submit"
+                            disabled={tmdbSearchLoading}
+                            className="h-9 px-4 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white font-bold text-xs transition-all flex items-center gap-1 active:scale-95 disabled:opacity-50 cursor-pointer"
+                          >
+                            {tmdbSearchLoading ? (
+                              <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                            ) : (
+                              "Search"
+                            )}
+                          </button>
+                        </form>
+
+                        {/* Search Results Display */}
+                        {tmdbSearchResults.length > 0 ? (
+                          <div className="flex flex-col gap-2 max-h-[300px] overflow-y-auto pr-1">
+                            {tmdbSearchResults.map((show) => {
+                              return (
+                                <div 
+                                  key={show.id}
+                                  className={`flex items-center justify-between p-2.5 rounded-xl border text-left gap-3 transition-colors ${
+                                    isDark ? "bg-[#10172a] border-[#1e2942] hover:border-indigo-500/30" : "bg-slate-50 border-slate-150 hover:border-indigo-300"
+                                  }`}
+                                >
+                                  <div className="flex items-center gap-2.5 min-w-0 flex-1">
+                                    <img 
+                                      src={show.poster_path} 
+                                      alt={show.title}
+                                      referrerPolicy="no-referrer"
+                                      className="w-8 h-11 rounded object-cover bg-slate-800 shrink-0 border border-slate-700/20 shadow-sm"
+                                    />
+                                    <div className="min-w-0">
+                                      <h4 className="text-xs font-bold text-slate-900 dark:text-slate-100 truncate">
+                                        {show.title}
+                                      </h4>
+                                      <p className="text-[10px] text-slate-400 font-mono mt-0.5">
+                                        {show.release_date ? show.release_date.split("-")[0] : "N/A"} • ID: {show.id}
+                                      </p>
+                                    </div>
+                                  </div>
+
+                                  {/* Slot Selection & Pin Button */}
+                                  <div className="flex items-center gap-1.5 shrink-0">
+                                    <select
+                                      id={`slot-select-${show.id}`}
+                                      className={`h-7 px-2 py-0 rounded-lg text-[10px] font-bold focus:outline-none transition-colors border ${
+                                        isDark 
+                                          ? "bg-[#161f38] border-[#223054] text-slate-100" 
+                                          : "bg-white border-slate-250 text-slate-700"
+                                      }`}
+                                    >
+                                      {Array.from({ length: heroConfig.max_items }).map((_, i) => (
+                                        <option key={i + 1} value={i + 1}>
+                                          Slot #{i + 1}
+                                        </option>
+                                      ))}
+                                    </select>
+                                    
+                                    <button
+                                      onClick={() => {
+                                        const selectElem = document.getElementById(`slot-select-${show.id}`) as HTMLSelectElement;
+                                        const chosenPos = selectElem ? parseInt(selectElem.value, 10) : 1;
+                                        
+                                        const updatedPins = heroConfig.pinned_items.filter(item => item.position !== chosenPos);
+                                        updatedPins.push({
+                                          drama_id: show.id,
+                                          position: chosenPos
+                                        });
+                                        updatedPins.sort((a, b) => a.position - b.position);
+
+                                        setHeroConfig(prev => ({
+                                          ...prev,
+                                          pinned_items: updatedPins
+                                        }));
+
+                                        setResolvedDramas(prev => ({
+                                          ...prev,
+                                          [show.id]: show
+                                        }));
+
+                                        addLog(`Successfully pinned "${show.title}" to Slide Slot #${chosenPos}!`, "success");
+                                      }}
+                                      className="h-7 w-7 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white flex items-center justify-center transition-all hover:scale-105 cursor-pointer"
+                                      title="Pin this drama"
+                                    >
+                                      <Plus className="w-3.5 h-3.5" />
+                                    </button>
+                                  </div>
+                                </div>
+                              );
+                            })}
+                          </div>
+                        ) : (
+                          <div className="text-center py-6 px-4 border border-dashed border-slate-700/10 dark:border-slate-800/60 rounded-xl">
+                            <Search className="w-6 h-6 text-slate-500 mx-auto opacity-55 mb-2" />
+                            <p className="text-[11px] text-slate-400 font-medium">Search for TV series or movie titles to find TMDB details & backdrop images instantly.</p>
+                          </div>
+                        )}
+                      </div>
+                    ) : (
+                      <div className="flex flex-col gap-3">
+                        <div className="flex gap-2">
+                          <div className="flex-1 flex flex-col gap-1">
+                            <label className="text-[10px] font-extrabold text-slate-400 uppercase tracking-wider">
+                              Lookup TMDB Drama ID
+                            </label>
+                            <input
+                              type="text"
+                              value={newPinnedDramaId}
+                              onChange={(e) => setNewPinnedDramaId(e.target.value)}
+                              placeholder="e.g. 111837, 94605, 96648"
+                              className={`w-full h-9 px-3 rounded-xl focus:outline-none focus:ring-2 focus:ring-indigo-500 font-mono text-xs transition-colors duration-300 border ${
+                                isDark 
+                                  ? "bg-[#11192e] border-[#1e2942] text-slate-100 placeholder-slate-600" 
+                                  : "bg-slate-50 border-slate-200 text-slate-700 placeholder-slate-400"
+                              }`}
+                            />
+                          </div>
+                          <button
+                            onClick={() => handleTmdbLookup(newPinnedDramaId)}
+                            disabled={lookupLoading || !newPinnedDramaId.trim()}
+                            className="h-9 px-4 mt-5 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white font-bold text-xs transition-all flex items-center justify-center active:scale-95 disabled:opacity-50 cursor-pointer shrink-0"
+                          >
+                            {lookupLoading ? (
+                              <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                            ) : (
+                              "Lookup ID"
+                            )}
+                          </button>
+                        </div>
+
+                        {/* Resolved Drama Card Preview */}
+                        {lookupDramaResult ? (
+                          <div className={`p-3.5 rounded-xl border text-left flex flex-col gap-3 transition-all ${
+                            isDark ? "bg-[#0b1021] border-indigo-500/20" : "bg-slate-50 border-indigo-100"
+                          }`}>
+                            <div className="flex gap-3">
+                              {lookupDramaResult.poster_path && (
+                                <img 
+                                  src={lookupDramaResult.poster_path} 
+                                  alt={lookupDramaResult.title}
+                                  referrerPolicy="no-referrer"
+                                  className="w-12 h-16 rounded object-cover bg-slate-800 border border-slate-700/20 shrink-0 shadow-sm"
+                                />
+                              )}
+                              <div className="flex flex-col min-w-0">
+                                <span className="text-xs font-black text-indigo-400 font-mono tracking-wider uppercase">Resolved Show Metadata</span>
+                                <h4 className="text-sm font-black text-slate-900 dark:text-slate-100 mt-0.5 truncate">{lookupDramaResult.title}</h4>
+                                <div className="flex items-center gap-2 mt-1">
+                                  {lookupDramaResult.vote_average > 0 && (
+                                    <span className="text-[10px] font-black bg-amber-500/10 text-amber-500 px-1.5 py-0.5 rounded">
+                                      ★ {Number(lookupDramaResult.vote_average).toFixed(1)}
+                                    </span>
+                                  )}
+                                  <span className="text-[10px] text-slate-400 font-medium">
+                                    {lookupDramaResult.release_date ? lookupDramaResult.release_date.split("-")[0] : ""}
+                                  </span>
+                                  <span className="text-[10px] text-slate-400 font-mono bg-slate-500/10 px-1 py-0.5 rounded uppercase">
+                                    {lookupDramaResult.type}
+                                  </span>
+                                </div>
+                              </div>
+                            </div>
+
+                            <p className="text-[10px] text-slate-400 line-clamp-2 leading-relaxed">
+                              {lookupDramaResult.overview}
+                            </p>
+
+                            <div className="flex gap-2 items-center border-t border-slate-700/10 dark:border-slate-800/60 pt-3 mt-1">
+                              <div className="flex-1 flex flex-col gap-1">
+                                <span className="text-[9px] font-extrabold text-slate-400 uppercase tracking-wider">Slot / Slide Index</span>
+                                <select
+                                  value={newPinnedPosition}
+                                  onChange={(e) => setNewPinnedPosition(parseInt(e.target.value, 10))}
+                                  className={`w-full h-8 px-2 rounded-lg text-xs transition-colors border ${
+                                    isDark 
+                                      ? "bg-[#11192e] border-[#1e2942] text-slate-100" 
+                                      : "bg-white border-slate-200 text-slate-700"
+                                  }`}
+                                >
+                                  {Array.from({ length: heroConfig.max_items }).map((_, i) => (
+                                    <option key={i + 1} value={i + 1}>
+                                      Slot #{i + 1}
+                                    </option>
+                                  ))}
+                                </select>
+                              </div>
+
+                              <button
+                                onClick={() => {
+                                  const updatedPins = heroConfig.pinned_items.filter(item => item.position !== newPinnedPosition);
+                                  updatedPins.push({
+                                    drama_id: lookupDramaResult.id,
+                                    position: newPinnedPosition
+                                  });
+                                  updatedPins.sort((a, b) => a.position - b.position);
+
+                                  setHeroConfig(prev => ({
+                                    ...prev,
+                                    pinned_items: updatedPins
+                                  }));
+
+                                  setResolvedDramas(prev => ({
+                                    ...prev,
+                                    [lookupDramaResult.id]: lookupDramaResult
+                                  }));
+
+                                  addLog(`Successfully pinned "${lookupDramaResult.title}" (ID: ${lookupDramaResult.id}) to Position Slot #${newPinnedPosition}!`, "success");
+                                  setLookupDramaResult(null);
+                                  setNewPinnedDramaId("");
+                                }}
+                                className="h-8 flex-1 mt-4 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white font-bold text-xs transition-all flex items-center justify-center gap-1 cursor-pointer"
+                              >
+                                <Plus className="w-3.5 h-3.5" />
+                                Pin Resolved Drama
+                              </button>
+                            </div>
+                          </div>
+                        ) : (
+                          <div className="flex flex-col gap-3">
+                            <div className="flex flex-col gap-1">
+                              <label className="text-[10px] font-extrabold text-slate-400 uppercase tracking-wider">
+                                Direct Pin (Fast Mode)
+                              </label>
+                              <div className="flex gap-2 items-center">
+                                <select
+                                  value={newPinnedPosition}
+                                  onChange={(e) => setNewPinnedPosition(parseInt(e.target.value, 10))}
+                                  className={`h-9 px-3 rounded-xl text-xs transition-colors border ${
+                                    isDark 
+                                      ? "bg-[#11192e] border-[#1e2942] text-slate-100" 
+                                      : "bg-slate-50 border-slate-200 text-slate-700"
+                                  }`}
+                                >
+                                  {Array.from({ length: heroConfig.max_items }).map((_, i) => (
+                                    <option key={i + 1} value={i + 1}>
+                                      Slot #{i + 1}
+                                    </option>
+                                  ))}
+                                </select>
+                                <button
+                                  onClick={() => {
+                                    if (!newPinnedDramaId.trim()) {
+                                      addLog("Drama ID is required to pin.", "error");
+                                      return;
+                                    }
+                                    
+                                    const updatedPins = heroConfig.pinned_items.filter(item => item.position !== newPinnedPosition);
+                                    updatedPins.push({
+                                      drama_id: newPinnedDramaId.trim(),
+                                      position: newPinnedPosition
+                                    });
+                                    updatedPins.sort((a, b) => a.position - b.position);
+
+                                    setHeroConfig(prev => ({
+                                      ...prev,
+                                      pinned_items: updatedPins
+                                    }));
+                                    
+                                    addLog(`Pinned ID '${newPinnedDramaId.trim()}' to position #${newPinnedPosition} locally.`, "success");
+                                    setNewPinnedDramaId("");
+                                  }}
+                                  disabled={!newPinnedDramaId.trim()}
+                                  className="h-9 flex-1 rounded-xl bg-indigo-600/20 hover:bg-indigo-600/30 text-indigo-400 hover:text-indigo-300 font-bold text-xs transition-all flex items-center justify-center gap-1 disabled:opacity-50 cursor-pointer"
+                                >
+                                  <Plus className="w-3.5 h-3.5" />
+                                  Pin ID Direct
+                                </button>
+                              </div>
+                            </div>
+                            
+                            <div className="text-center py-4 px-4 border border-dashed border-slate-700/10 dark:border-slate-800/60 rounded-xl">
+                              <Info className="w-4.5 h-4.5 text-slate-500 mx-auto opacity-55 mb-2" />
+                              <p className="text-[10px] text-slate-400 font-medium">Tip: Type a numeric TMDB ID and press "Lookup ID" to pull its beautiful visual posters and storyline. Or click "Pin ID Direct" to save the ID immediately.</p>
+                            </div>
+                          </div>
+                        )}
+                      </div>
+                    )}
+
+                    {/* Immediate save button after pinning any drama */}
+                    {initialHeroConfig && JSON.stringify(heroConfig.pinned_items) !== JSON.stringify(initialHeroConfig.pinned_items) && (
+                      <div className="mt-3 p-3 rounded-xl bg-emerald-500/10 border border-emerald-500/20 flex items-center justify-between gap-3 text-left animate-fade-in">
+                        <div className="flex items-center gap-2">
+                          <CheckCircle className="w-4 h-4 text-emerald-500 shrink-0" />
+                          <span className="text-[11px] font-bold text-emerald-400">Pinned changes pending save</span>
+                        </div>
+                        <button
+                          onClick={() => saveHeroConfig()}
+                          disabled={heroSaving}
+                          className="h-8 px-3.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white font-black text-xs transition-all flex items-center gap-1 cursor-pointer shadow"
+                        >
+                          <Save className="w-3.5 h-3.5" />
+                          {heroSaving ? "Saving..." : "Save Pinned Drama"}
+                        </button>
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
+
+              {/* Center/Right: Slide Track Visualizer & Integration */}
+              <div className="lg:col-span-2 flex flex-col gap-6">
+                
+                {/* Slide Track Visualizer Card */}
+                <div className={`rounded-2xl p-5 border shadow-sm flex flex-col gap-5 text-left transition-colors duration-300 ${
+                  isDark ? "bg-[#0c1224] border-[#1e2942]" : "bg-white border-slate-200"
+                }`}>
+                  <div className="flex items-center justify-between pb-3 border-b transition-colors duration-300 border-[#1e2942]/10 dark:border-slate-700/20">
+                    <div className="flex items-center gap-2">
+                      <LayoutDashboard className="w-4.5 h-4.5 text-indigo-400" />
+                      <h2 className="text-sm font-bold tracking-tight">Slide Deck Layout Preview</h2>
+                    </div>
+                    <span className="text-[10px] font-bold text-slate-400">
+                      Total Track Length: {heroConfig.max_items} Slides
+                    </span>
+                  </div>
+
+                  {/* Pending save banner for layout changes */}
+                  {initialHeroConfig && JSON.stringify(heroConfig.pinned_items) !== JSON.stringify(initialHeroConfig.pinned_items) && (
+                    <div className="p-3.5 rounded-xl bg-emerald-500/10 border border-emerald-500/20 flex flex-col sm:flex-row items-center justify-between gap-3 text-left animate-fade-in">
+                      <div className="flex items-center gap-2">
+                        <CheckCircle className="w-4.5 h-4.5 text-emerald-500 shrink-0" />
+                        <div>
+                          <p className="text-xs font-bold text-emerald-400">Layout changes pending save</p>
+                          <p className="text-[10px] text-slate-400">Drag items to reorder slide positions visually.</p>
+                        </div>
+                      </div>
+                      <button
+                        onClick={() => saveHeroConfig()}
+                        disabled={heroSaving}
+                        className="w-full sm:w-auto h-8 px-4 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white font-black text-xs transition-all flex items-center justify-center gap-1.5 cursor-pointer shadow-sm active:scale-95"
+                      >
+                        <Save className="w-3.5 h-3.5" />
+                        {heroSaving ? "Saving..." : "Save Layout Changes"}
+                      </button>
+                    </div>
+                  )}
+
+                  {/* Track Deck */}
+                  <div className="flex flex-col gap-3">
+                    {Array.from({ length: heroConfig.max_items }).map((_, index) => {
+                      const pos = index + 1;
+                      const pinnedItem = heroConfig.pinned_items.find(p => p.position === pos);
+                      const isPinned = !!pinnedItem && heroConfig.mode !== "AUTO";
+                      const isDragged = draggedPosition === pos;
+                      const isDragOver = dragOverPosition === pos;
+
+                      return (
+                        <div
+                          key={pos}
+                          draggable={true}
+                          onDragStart={(e) => handleDragStart(e, pos)}
+                          onDragOver={(e) => handleDragOver(e, pos)}
+                          onDragLeave={handleDragLeave}
+                          onDrop={(e) => handleDrop(e, pos)}
+                          onDragEnd={handleDragEnd}
+                          className={`flex items-center justify-between p-3.5 rounded-xl border transition-all duration-200 ${
+                            isDragged
+                              ? "opacity-30 border-dashed border-indigo-500 bg-indigo-500/5 scale-[0.98]"
+                              : isDragOver
+                                ? "border-indigo-500 bg-indigo-500/10 scale-[1.01] shadow-lg ring-2 ring-indigo-500/20"
+                                : isPinned
+                                  ? isDark
+                                    ? "bg-[#101931] border-indigo-500/40 hover:border-indigo-500/60 shadow-inner cursor-grab active:cursor-grabbing"
+                                    : "bg-indigo-50/50 border-indigo-200 hover:border-indigo-300 shadow-sm cursor-grab active:cursor-grabbing"
+                                  : isDark
+                                    ? "bg-[#0f172a] border-slate-800 hover:border-slate-700 cursor-grab active:cursor-grabbing"
+                                    : "bg-slate-50 border-slate-100 hover:border-slate-200 cursor-grab active:cursor-grabbing"
+                          }`}
+                        >
+                          <div className="flex items-center gap-3">
+                            {/* Grip handle and slide number indicator */}
+                            <div className="flex items-center gap-1.5 shrink-0 select-none">
+                              <GripVertical className="w-4 h-4 text-slate-500/40 hover:text-indigo-400 transition-colors shrink-0 cursor-grab active:cursor-grabbing" />
+                              <div className={`w-8 h-8 rounded-lg flex items-center justify-center text-xs font-black font-mono shadow ${
+                                isPinned
+                                  ? "bg-indigo-600 text-white"
+                                  : isDark
+                                    ? "bg-slate-800 text-slate-300"
+                                    : "bg-white text-slate-500 border border-slate-200"
+                              }`}>
+                                #{pos}
+                              </div>
+                            </div>
+                            
+                            {isPinned ? (
+                              (() => {
+                                const details = resolvedDramas[pinnedItem.drama_id];
+                                return details ? (
+                                  <div className="flex items-center gap-3 text-left">
+                                    {details.poster_path && (
+                                      <img
+                                        src={details.poster_path}
+                                        alt={details.title}
+                                        referrerPolicy="no-referrer"
+                                        className="w-10 h-14 rounded object-cover border border-[#1e2942]/10 dark:border-slate-800/50 shadow-sm shrink-0"
+                                      />
+                                    )}
+                                    <div className="flex flex-col">
+                                      <div className="flex flex-wrap items-center gap-2">
+                                        <span className="text-xs font-black tracking-tight text-slate-900 dark:text-slate-100">
+                                          {details.title}
+                                        </span>
+                                        {details.vote_average > 0 && (
+                                          <span className="text-[9px] font-black bg-amber-500/10 text-amber-500 px-1.5 py-0.5 rounded border border-amber-500/10">
+                                            ★ {Number(details.vote_average).toFixed(1)}
+                                          </span>
+                                        )}
+                                        <span className="text-[9px] font-black uppercase px-1.5 py-0.5 rounded bg-indigo-500/10 text-indigo-400 border border-indigo-500/10 dark:bg-indigo-500/20 dark:text-indigo-300">
+                                          Pinned
+                                        </span>
+                                        {details.country && (
+                                          <span className="text-[9px] font-black uppercase px-1.5 py-0.5 rounded bg-emerald-500/10 text-emerald-500 border border-emerald-500/10 dark:bg-emerald-500/20 dark:text-emerald-300">
+                                            {details.country === "KR" ? "🇰🇷 KR" : `🌐 ${details.country}`}
+                                          </span>
+                                        )}
+                                        <span className="text-[9px] text-slate-400 font-mono">
+                                          ID: {pinnedItem.drama_id}
+                                        </span>
+                                      </div>
+                                      <p className="text-[10px] text-slate-400 mt-0.5 font-mono">
+                                        {details.release_date ? `${details.release_date.split("-")[0]}` : ""} {details.genres && details.genres.length > 0 ? `• ${details.genres.slice(0, 2).join(", ")}` : ""}
+                                      </p>
+                                      <p className="text-[10px] text-slate-500 dark:text-slate-400 line-clamp-1 mt-0.5 max-w-sm sm:max-w-md md:max-w-lg">
+                                        {details.overview}
+                                      </p>
+                                    </div>
+                                  </div>
+                                ) : (
+                                  <div className="text-left">
+                                    <div className="flex items-center gap-2">
+                                      <span className="text-xs font-black font-mono tracking-wide text-indigo-400 dark:text-indigo-300">
+                                        {pinnedItem.drama_id}
+                                      </span>
+                                      <span className="text-[9px] font-black uppercase px-1.5 py-0.5 rounded bg-indigo-500/20 text-indigo-400 border border-indigo-500/20 animate-pulse">
+                                        Resolving...
+                                      </span>
+                                    </div>
+                                    <p className="text-[10px] text-slate-500 mt-0.5">
+                                      Resolving TMDB/Gemini show metadata & backdrop assets...
+                                    </p>
+                                  </div>
+                                );
+                              })()
+                            ) : (
+                              <div className="text-left">
+                                <div className="flex items-center gap-2">
+                                  <span className="text-xs font-bold text-slate-500 italic">
+                                    {heroConfig.mode === "MANUAL" 
+                                      ? "Slot empty / Unassigned (In MANUAL mode this slot will skip)" 
+                                      : `Dynamically populated using active Fallback queries [${heroConfig.auto_source}]`}
+                                  </span>
+                                  {heroConfig.mode === "HYBRID" && (
+                                    <span className="text-[9px] font-black uppercase px-1.5 py-0.5 rounded bg-amber-500/15 text-amber-400 border border-amber-500/20">
+                                      Auto Fill
+                                    </span>
+                                  )}
+                                </div>
+                                <p className="text-[10px] text-slate-500 mt-0.5">
+                                  System will fetch top dramas and dynamically map results here.
+                                </p>
+                              </div>
+                            )}
+                          </div>
+
+                          {/* Slide Actions */}
+                          {isPinned && (
+                            <button
+                              onClick={() => {
+                                const details = resolvedDramas[pinnedItem.drama_id];
+                                const title = details?.title || pinnedItem.drama_id;
+                                setPendingUnpin({
+                                  drama_id: pinnedItem.drama_id,
+                                  position: pos,
+                                  title: title
+                                });
+                              }}
+                              className="p-1.5 rounded-lg hover:bg-rose-500/10 text-rose-500 transition-colors cursor-pointer"
+                              title="Unpin Drama"
+                            >
+                              <X className="w-4 h-4" />
+                            </button>
+                          )}
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+
+
+
+              </div>
+
+            </div>
+          </div>
+        )}
+
+        {/* CDN SECTION */}
+        {activeTab === "cdn" && (
+          <div className="flex-1 flex flex-col gap-6 overflow-y-auto pr-1">
+            <div className={`rounded-2xl p-6 border transition-colors duration-300 ${
+              isDark ? "bg-[#0c1224] border-[#1e2942]" : "bg-white border-slate-200"
+            }`}>
+              <div className="flex items-center gap-2 text-rose-600 font-black tracking-tight text-lg mb-2">
+                <Github className="w-6 h-6" />
+                Production CDN & Git Secrets Configuration
+              </div>
+              <p className={`text-xs leading-relaxed max-w-2xl text-left ${isDark ? "text-slate-400" : "text-slate-500"}`}>
+                HanZone Admin implements fully secure backend credentials handling. 
+                Instead of leaking sensitive GitHub personal access tokens or repository variables to the client browser, 
+                all file write, merge, and tree compilation transactions are handled server-side.
+              </p>
+
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mt-6 pt-6 border-t border-slate-700/20">
+                {/* Active Parameters List */}
+                <div className="flex flex-col gap-4">
+                  <h3 className={`text-xs font-black uppercase tracking-wider text-left ${isDark ? "text-slate-300" : "text-slate-700"}`}>
+                    Active Environment Context
+                  </h3>
+                  
+                  <div className="space-y-3 font-mono text-xs">
+                    <div className={`p-3 rounded-xl border flex items-center justify-between transition-colors duration-300 ${
+                      isDark ? "bg-[#11192e] border-[#1e2942]" : "bg-slate-50 border-slate-200"
+                    }`}>
+                      <div className="flex flex-col gap-0.5">
+                        <span className="text-[9px] text-slate-400 uppercase tracking-widest text-left">Git Repository Owner</span>
+                        <span className={`font-bold text-left ${isDark ? "text-slate-200" : "text-slate-800"}`}>HanZone Studio</span>
+                      </div>
+                      <span className="text-[10px] font-bold px-2 py-0.5 rounded bg-emerald-500/10 text-emerald-500 uppercase">Configured</span>
+                    </div>
+
+                    <div className={`p-3 rounded-xl border flex items-center justify-between transition-colors duration-300 ${
+                      isDark ? "bg-[#11192e] border-[#1e2942]" : "bg-slate-50 border-slate-200"
+                    }`}>
+                      <div className="flex flex-col gap-0.5">
+                        <span className="text-[9px] text-slate-400 uppercase tracking-widest text-left">Repository Name</span>
+                        <span className={`font-bold text-left ${isDark ? "text-slate-200" : "text-slate-800"}`}>hanzone-app-data</span>
+                      </div>
+                      <span className="text-[10px] font-bold px-2 py-0.5 rounded bg-emerald-500/10 text-emerald-500 uppercase">Configured</span>
+                    </div>
+
+                    <div className={`p-3 rounded-xl border flex items-center justify-between transition-colors duration-300 ${
+                      isDark ? "bg-[#11192e] border-[#1e2942]" : "bg-slate-50 border-slate-200"
+                    }`}>
+                      <div className="flex flex-col gap-0.5">
+                        <span className="text-[9px] text-slate-400 uppercase tracking-widest text-left">Active Branch</span>
+                        <span className={`font-bold text-left ${isDark ? "text-slate-200" : "text-slate-800"}`}>main (production)</span>
+                      </div>
+                      <span className="text-[10px] font-bold px-2 py-0.5 rounded bg-indigo-500/10 text-indigo-500 uppercase">Default</span>
+                    </div>
+
+                    <div className={`p-3 rounded-xl border flex items-center justify-between transition-colors duration-300 ${
+                      isDark ? "bg-[#11192e] border-[#1e2942]" : "bg-slate-50 border-slate-200"
+                    }`}>
+                      <div className="flex flex-col gap-0.5">
+                        <span className="text-[9px] text-slate-400 uppercase tracking-widest text-left">Raw File path Target</span>
+                        <span className={`font-bold text-left ${isDark ? "text-slate-200" : "text-slate-800"}`}>/genres.json</span>
+                      </div>
+                      <span className="text-[10px] font-bold px-2 py-0.5 rounded bg-emerald-500/10 text-emerald-500 uppercase">Parsed</span>
+                    </div>
+                  </div>
+                </div>
+
+                {/* CDN Sync Control Panel */}
+                <div className={`rounded-xl p-5 border transition-colors duration-300 ${
+                  isDark ? "bg-[#11192e] border-[#1e2942]" : "bg-slate-50 border-slate-100"
+                }`}>
+                  <h3 className={`text-xs font-black uppercase tracking-wider mb-3 text-left ${isDark ? "text-slate-300" : "text-slate-700"}`}>
+                    Manually Reload & Flush CDN Cache
+                  </h3>
+                  <p className={`text-xs leading-relaxed mb-4 text-left ${isDark ? "text-slate-400" : "text-slate-500"}`}>
+                    To optimize delivery to mobile clients, files served via raw GitHub URLs may experience up to 5 minutes of cache lifetime. 
+                    If you modified the `genres.json` file manually on Github, use this action to force-invalidate the local backend memory buffer and fetch the newest contents.
+                  </p>
+
+                  <button 
+                    onClick={() => loadData()}
+                    disabled={loading}
+                    className="w-full h-11 bg-rose-600 hover:bg-rose-700 text-white font-bold rounded-xl text-xs flex items-center justify-center gap-2 disabled:opacity-50 transition-all active:scale-[0.98]"
+                  >
+                    <RefreshCw className={`w-4 h-4 ${loading ? "animate-spin" : ""}`} />
+                    Reload Production Data From Source
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* USERS SECTION */}
+        {activeTab === "users" && (
+          <div className="flex-1 flex flex-col gap-6 overflow-y-auto pr-1">
+            <div className={`rounded-2xl p-6 border text-left transition-colors duration-300 ${
+              isDark ? "bg-[#0c1224] border-[#1e2942]" : "bg-white border-slate-200"
+            }`}>
+              <div className="flex items-center gap-2 text-indigo-500 font-black tracking-tight text-lg mb-2">
+                <Users className="w-6 h-6" />
+                Collaborator & Access Management
+              </div>
+              <p className={`text-xs leading-relaxed max-w-2xl mb-6 ${isDark ? "text-slate-400" : "text-slate-500"}`}>
+                Establish multiple administrative accounts, restrict access tokens, and view precise audit trails. 
+                This section is currently under planning for Phase 2 implementation.
+              </p>
+
+              {/* Administrative Users Table */}
+              <div className="overflow-x-auto rounded-xl border border-slate-750/10">
+                <table className="w-full text-left text-xs font-medium">
+                  <thead className={`text-[10px] uppercase tracking-wider ${
+                    isDark ? "bg-[#11192e] text-slate-400" : "bg-slate-50 text-slate-500"
+                  }`}>
+                    <tr>
+                      <th className="p-4">Email Address</th>
+                      <th className="p-4">Assigned Role</th>
+                      <th className="p-4">Last Active</th>
+                      <th className="p-4">Security Level</th>
+                      <th className="p-4">Action Status</th>
+                    </tr>
+                  </thead>
+                  <tbody className={`divide-y divide-slate-750/10 ${isDark ? "text-slate-200" : "text-slate-700"}`}>
+                    <tr>
+                      <td className="p-4 font-bold flex items-center gap-2">
+                        <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
+                        cjtggg10@gmail.com
+                      </td>
+                      <td className="p-4 font-mono">OWNER</td>
+                      <td className="p-4">Just Now</td>
+                      <td className="p-4">
+                        <span className="px-2 py-0.5 rounded bg-rose-500/10 text-rose-500 font-bold text-[10px]">Level 3 (Max)</span>
+                      </td>
+                      <td className="p-4">
+                        <span className="text-emerald-500 font-bold">Active Host</span>
+                      </td>
+                    </tr>
+                    <tr className="opacity-40">
+                      <td className="p-4 font-bold">developer@hanzone.com</td>
+                      <td className="p-4 font-mono">DEVELOPER</td>
+                      <td className="p-4">3 Days Ago</td>
+                      <td className="p-4">
+                        <span className="px-2 py-0.5 rounded bg-indigo-500/10 text-indigo-500 font-bold text-[10px]">Level 2</span>
+                      </td>
+                      <td className="p-4 italic">Pending Phase 2</td>
+                    </tr>
+                    <tr className="opacity-40">
+                      <td className="p-4 font-bold">moderator@hanzone.com</td>
+                      <td className="p-4 font-mono">MODERATOR</td>
+                      <td className="p-4">Never</td>
+                      <td className="p-4">
+                        <span className="px-2 py-0.5 rounded bg-indigo-500/10 text-indigo-500 font-bold text-[10px]">Level 1</span>
+                      </td>
+                      <td className="p-4 italic">Pending Phase 2</td>
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
+
+              {/* Multi-role disclaimer banner */}
+              <div className={`mt-6 p-4 rounded-xl border flex items-center gap-3 ${
+                isDark ? "bg-[#11192e] border-[#1e2942] text-indigo-200" : "bg-slate-50 border-slate-100 text-slate-700"
+              }`}>
+                <Info className="w-5 h-5 text-indigo-400 shrink-0" />
+                <span className="text-[11px] leading-relaxed">
+                  Additional users will be enabled automatically as soon as the active Database service configuration merges securely.
+                </span>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* LOGS SECTION */}
+        {activeTab === "logs" && (
+          <div className="flex-1 flex flex-col gap-4 min-h-0">
+            {/* Header segment with filters */}
+            <div className={`rounded-2xl p-4 border flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 shrink-0 ${
+              isDark ? "bg-[#0c1224] border-[#1e2942]" : "bg-white border-slate-200"
+            }`}>
+              <div className="text-left">
+                <h2 className={`font-black tracking-tight text-lg ${isDark ? "text-white" : "text-slate-900"}`}>
+                  System Diagnostics & Transaction Feed
+                </h2>
+                <p className="text-xs text-slate-400 mt-0.5">
+                  Raw log lines generated by active client commits, git pull requests, and secure environment updates.
+                </p>
+              </div>
+
+              <div className="flex items-center gap-2">
+                <button 
+                  onClick={() => setStatusLogs([])}
+                  className={`h-9 px-4 font-bold text-xs rounded-xl transition-all border active:scale-[0.98] ${
+                    isDark 
+                      ? "bg-transparent border-slate-700 hover:bg-slate-800 text-slate-300" 
+                      : "bg-white border-slate-200 hover:bg-slate-50 text-slate-600"
+                  }`}
+                >
+                  Clear Feed Log
+                </button>
+              </div>
+            </div>
+
+            {/* Immersive Terminal Output */}
+            <div className={`flex-1 rounded-2xl p-5 font-mono text-xs flex flex-col border shadow-inner min-h-0 ${
+              isDark 
+                ? "bg-[#060a15] border-[#131d33] text-indigo-200" 
+                : "bg-slate-950 border-slate-900 text-slate-300"
+            }`}>
+              <div className="flex items-center gap-2 text-[10px] text-slate-500 font-extrabold uppercase tracking-widest border-b border-slate-800 pb-2 mb-3 shrink-0">
+                <Terminal className="w-4 h-4 text-rose-500" />
+                HanZone-Hub-Server-Console v1.0.4 - Live Connection Stream
+              </div>
+
+              <div className="flex-1 overflow-y-auto space-y-1.5 pr-1 text-[11px]">
+                <div className="text-slate-500 text-left">Initializing Terminal Log Capture...</div>
+                <div className="text-emerald-500 font-bold text-left">[HOST_CONNECTED] HanZone live admin connected at {new Date().toLocaleDateString()}</div>
+                {statusLogs.length === 0 ? (
+                  <div className="text-slate-600 italic py-6 text-center">Console stream ready. No transactions logged in this session yet.</div>
+                ) : (
+                  statusLogs.map((log, index) => (
+                    <div key={index} className="flex gap-3 items-start leading-relaxed text-left">
+                      <span className="text-slate-600 shrink-0 font-bold">[{log.time}]</span>
+                      <span className={
+                        log.type === "success" ? "text-emerald-400 font-bold" :
+                        log.type === "error" ? "text-rose-500 font-bold animate-pulse" : "text-indigo-300"
+                      }>
+                        {log.text}
+                      </span>
+                    </div>
+                  ))
+                )}
+              </div>
+            </div>
+          </div>
+        )}
+
+      </main>
       </div>
+
+      {/* Center-bottom layout preview delete overlay */}
+      {pendingUnpin && (
+        <>
+          {/* Backdrop layer to prevent click leakage to underlying dashboard components */}
+          <div 
+            onClick={() => setPendingUnpin(null)}
+            className="fixed inset-0 z-40 bg-[#02050e]/50 dark:bg-black/70 backdrop-blur-[1px] animate-fade-in cursor-pointer transition-opacity"
+          />
+          <div className="fixed bottom-6 left-1/2 -translate-x-1/2 z-50 animate-in fade-in slide-in-from-bottom-4 duration-200">
+            <div className={`p-4 rounded-2xl shadow-2xl border flex flex-col sm:flex-row items-center gap-4 max-w-md w-[90vw] ${
+              isDark ? "bg-[#0b1021] border-[#1e2942] text-slate-100 shadow-[#03060f]" : "bg-white border-slate-200 text-slate-800 shadow-slate-200"
+            }`}>
+              <div className="flex items-center gap-3 text-left">
+                <div className="w-9 h-9 rounded-xl bg-rose-500/10 flex items-center justify-center text-rose-500 shrink-0">
+                  <Trash2 className="w-4.5 h-4.5" />
+                </div>
+                <div className="min-w-0 flex-1">
+                  <h4 className="text-xs font-black tracking-tight uppercase text-rose-400">Unpin Drama?</h4>
+                  <p className="text-[11px] text-slate-400 mt-0.5 font-bold truncate">
+                    Slot #{pendingUnpin.position}: {pendingUnpin.title}
+                  </p>
+                </div>
+              </div>
+              <div className="flex gap-2 w-full sm:w-auto shrink-0">
+                <button
+                  onClick={() => setPendingUnpin(null)}
+                  className={`flex-1 sm:flex-none h-8 px-3 rounded-lg text-xs font-bold transition-all border ${
+                    isDark 
+                      ? "bg-[#161f38] border-[#223054] text-slate-300 hover:bg-[#1f2c4e] cursor-pointer" 
+                      : "bg-slate-100 border-slate-200 text-slate-600 hover:bg-slate-200 cursor-pointer"
+                  }`}
+                >
+                  Cancel
+                </button>
+                <button
+                  onClick={async () => {
+                    const updatedPins = heroConfig.pinned_items.filter(p => p.position !== pendingUnpin.position);
+                    const newConfig = { ...heroConfig, pinned_items: updatedPins };
+                    setHeroConfig(newConfig);
+                    setPendingUnpin(null);
+                    addLog(`Unpinned "${pendingUnpin.title}" from slide #${pendingUnpin.position} locally.`, "info");
+                    
+                    // Automatically trigger the save call!
+                    await saveHeroConfig(newConfig);
+                  }}
+                  disabled={heroSaving}
+                  className="flex-1 sm:flex-none h-8 px-4 rounded-lg bg-rose-600 hover:bg-rose-500 text-white font-bold text-xs transition-all flex items-center justify-center gap-1 cursor-pointer"
+                >
+                  <Save className="w-3 h-3" />
+                  {heroSaving ? "Saving..." : "Save Changes"}
+                </button>
+              </div>
+            </div>
+          </div>
+        </>
+      )}
     </div>
   );
 }
