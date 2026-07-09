@@ -214,7 +214,11 @@ app.get("/api/get-genres", async (req, res) => {
       if (fileData.content) {
         const content = Buffer.from(fileData.content, "base64").toString("utf-8");
         const parsed = JSON.parse(content);
-        fs.writeFileSync(localPath, JSON.stringify(parsed, null, 2), "utf-8");
+        try {
+          fs.writeFileSync(localPath, JSON.stringify(parsed, null, 2), "utf-8");
+        } catch (localWriteErr) {
+          console.warn("[GitHub Sync] Local file write for genres.json failed (read-only filesystem?):", localWriteErr);
+        }
         cachedGenres = parsed;
         genresLastFetched = now;
         return res.json(parsed);
@@ -230,7 +234,11 @@ app.get("/api/get-genres", async (req, res) => {
       if (rRaw.ok) {
         const content = await rRaw.text();
         const parsed = JSON.parse(content);
-        fs.writeFileSync(localPath, JSON.stringify(parsed, null, 2), "utf-8");
+        try {
+          fs.writeFileSync(localPath, JSON.stringify(parsed, null, 2), "utf-8");
+        } catch (localWriteErr) {
+          console.warn("[GitHub Sync] Local file write for genres.json failed (read-only filesystem?):", localWriteErr);
+        }
         cachedGenres = parsed;
         genresLastFetched = now;
         return res.json(parsed);
@@ -323,7 +331,11 @@ app.get("/api/get-hero-config", async (req, res) => {
       if (fileData.content) {
         const content = Buffer.from(fileData.content, "base64").toString("utf-8");
         const parsed = JSON.parse(content);
-        fs.writeFileSync(localPath, JSON.stringify(parsed, null, 2), "utf-8");
+        try {
+          fs.writeFileSync(localPath, JSON.stringify(parsed, null, 2), "utf-8");
+        } catch (localWriteErr) {
+          console.warn("[GitHub Sync] Local file write for hero_config.json failed (read-only filesystem?):", localWriteErr);
+        }
         cachedHeroConfig = parsed;
         heroConfigLastFetched = now;
         return res.json(parsed);
@@ -339,7 +351,11 @@ app.get("/api/get-hero-config", async (req, res) => {
       if (rRaw.ok) {
         const content = await rRaw.text();
         const parsed = JSON.parse(content);
-        fs.writeFileSync(localPath, JSON.stringify(parsed, null, 2), "utf-8");
+        try {
+          fs.writeFileSync(localPath, JSON.stringify(parsed, null, 2), "utf-8");
+        } catch (localWriteErr) {
+          console.warn("[GitHub Sync] Local file write for hero_config.json failed (read-only filesystem?):", localWriteErr);
+        }
         cachedHeroConfig = parsed;
         heroConfigLastFetched = now;
         return res.json(parsed);
@@ -498,7 +514,11 @@ app.post("/api/github/update-hero-config", verifyAdmin, async (req, res) => {
   if (missing.length > 0) {
     try {
       const localPath = path.join(process.cwd(), filePath);
-      fs.writeFileSync(localPath, JSON.stringify(fullConfig, null, 2), "utf-8");
+      try {
+        fs.writeFileSync(localPath, JSON.stringify(fullConfig, null, 2), "utf-8");
+      } catch (localWriteErr) {
+        console.warn("[GitHub Sync] Local file write for hero_config.json fallback failed:", localWriteErr);
+      }
       cachedHeroConfig = fullConfig;
       heroConfigLastFetched = Date.now();
 
@@ -724,7 +744,11 @@ app.post("/api/github/sync-hero-metadata", verifyAdmin, async (req, res) => {
   if (missing.length > 0) {
     try {
       const localPath = path.join(process.cwd(), filePath);
-      fs.writeFileSync(localPath, JSON.stringify(activeConfig, null, 2), "utf-8");
+      try {
+        fs.writeFileSync(localPath, JSON.stringify(activeConfig, null, 2), "utf-8");
+      } catch (localWriteErr) {
+        console.warn("[GitHub Sync] Local file write for activeConfig fallback failed:", localWriteErr);
+      }
       cachedHeroConfig = activeConfig;
       heroConfigLastFetched = Date.now();
       return res.json({
@@ -1285,7 +1309,11 @@ const loadDramaLinks = async (): Promise<Record<string, { stream_url: string | n
         if (fileData.content) {
           const content = Buffer.from(fileData.content, "base64").toString("utf-8");
           const parsed = JSON.parse(content);
-          fs.writeFileSync(localPath, JSON.stringify(parsed, null, 2), "utf-8");
+          try {
+            fs.writeFileSync(localPath, JSON.stringify(parsed, null, 2), "utf-8");
+          } catch (localWriteErr) {
+            console.warn("[GitHub Sync] Local file write for drama_links.json failed (read-only filesystem?):", localWriteErr);
+          }
           cachedDramaLinks = parsed;
           dramaLinksLastFetched = now;
           return parsed;
@@ -1301,7 +1329,11 @@ const loadDramaLinks = async (): Promise<Record<string, { stream_url: string | n
         if (rRaw.ok) {
           const content = await rRaw.text();
           const parsed = JSON.parse(content);
-          fs.writeFileSync(localPath, JSON.stringify(parsed, null, 2), "utf-8");
+          try {
+            fs.writeFileSync(localPath, JSON.stringify(parsed, null, 2), "utf-8");
+          } catch (localWriteErr) {
+            console.warn("[GitHub Sync] Local file write for drama_links.json failed (read-only filesystem?):", localWriteErr);
+          }
           cachedDramaLinks = parsed;
           dramaLinksLastFetched = now;
           return parsed;
@@ -1471,7 +1503,11 @@ const loadHomeLayout = async (): Promise<any[]> => {
         if (fileData.content) {
           const content = Buffer.from(fileData.content, "base64").toString("utf-8");
           const parsed = JSON.parse(content);
-          fs.writeFileSync(localPath, JSON.stringify(parsed, null, 2), "utf-8");
+          try {
+            fs.writeFileSync(localPath, JSON.stringify(parsed, null, 2), "utf-8");
+          } catch (localWriteErr) {
+            console.warn("[GitHub Sync] Local file write for home_layout.json failed (read-only filesystem?):", localWriteErr);
+          }
           cachedHomeLayout = parsed;
           homeLayoutLastFetched = now;
           return parsed;
@@ -1487,7 +1523,11 @@ const loadHomeLayout = async (): Promise<any[]> => {
         if (rRaw.ok) {
           const content = await rRaw.text();
           const parsed = JSON.parse(content);
-          fs.writeFileSync(localPath, JSON.stringify(parsed, null, 2), "utf-8");
+          try {
+            fs.writeFileSync(localPath, JSON.stringify(parsed, null, 2), "utf-8");
+          } catch (localWriteErr) {
+            console.warn("[GitHub Sync] Local file write for home_layout.json failed (read-only filesystem?):", localWriteErr);
+          }
           cachedHomeLayout = parsed;
           homeLayoutLastFetched = now;
           return parsed;
@@ -2307,7 +2347,11 @@ app.post("/api/github/fetch", verifyAdmin, async (req, res) => {
         parsedJson = JSON.parse(fileContent);
       } else {
         console.log("GitHub credentials missing & local file deleted. Recreating genres.json with default genres.");
-        fs.writeFileSync(localPath, JSON.stringify(DEFAULT_GENRES, null, 4), "utf-8");
+        try {
+          fs.writeFileSync(localPath, JSON.stringify(DEFAULT_GENRES, null, 4), "utf-8");
+        } catch (localWriteErr) {
+          console.warn("Local file write for DEFAULT_GENRES fallback failed (read-only filesystem?):", localWriteErr);
+        }
         parsedJson = DEFAULT_GENRES;
       }
       return res.json({
@@ -2438,7 +2482,11 @@ app.post("/api/github/update", verifyAdmin, async (req, res) => {
           existingGenres[index].bg_url = backdrop;
         }
       }
-      fs.writeFileSync(localPath, JSON.stringify(existingGenres, null, 4), "utf-8");
+      try {
+        fs.writeFileSync(localPath, JSON.stringify(existingGenres, null, 4), "utf-8");
+      } catch (localWriteErr) {
+        console.warn("Local file write for existingGenres failed (read-only filesystem?):", localWriteErr);
+      }
 
       return res.json({
         success: true,
