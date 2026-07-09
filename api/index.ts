@@ -79,8 +79,30 @@ const DEFAULT_GENRES = [
   }
 ];
 
+const DEFAULT_HERO_CONFIG = {
+  "hero_config": {
+    "mode": "HYBRID",
+    "max_items": 6,
+    "auto_source": "popular",
+    "pinned_items": [
+      {
+        "drama_id": "drama_123_id",
+        "position": 1
+      },
+      {
+        "drama_id": "drama_456_id",
+        "position": 3
+      }
+    ]
+  }
+};
+
 const app = express();
 app.use(express.json({ limit: "5mb" }));
+
+// Server-side in-memory cache for resolved TMDB details to protect Gemini free-tier rate limits
+const tmdbDetailsCache: Record<string, any> = {};
+const inFlightDetails: Record<string, Promise<any>> = {};
 
 // --- API Routes ---
 
@@ -103,6 +125,27 @@ app.post("/api/login", (req, res) => {
   } else {
     return res.status(401).json({ success: false, error: "Incorrect administrator password. Access denied." });
   }
+});
+
+// System health and stats route
+app.get("/api/system/stats", (req, res) => {
+  const memory = process.memoryUsage();
+  res.json({
+    success: true,
+    uptime: process.uptime(),
+    memory: {
+      rss: Math.round(memory.rss / 1024 / 1024 * 100) / 100, // MB
+      heapTotal: Math.round(memory.heapTotal / 1024 / 1024 * 100) / 100, // MB
+      heapUsed: Math.round(memory.heapUsed / 1024 / 1024 * 100) / 100, // MB
+    },
+    nodeVersion: process.version,
+    platform: process.platform,
+    githubConfigured: !!(process.env.GITHUB_OWNER && process.env.GITHUB_REPO && process.env.GITHUB_TOKEN),
+    owner: process.env.GITHUB_OWNER || "Not Set",
+    repo: process.env.GITHUB_REPO || "Not Set",
+    branch: process.env.GITHUB_BRANCH || "main",
+    filePath: process.env.GITHUB_FILE_PATH || "genres.json"
+  });
 });
 
 // Public endpoint to fetch genres (no-auth, bypasses CDN cache, used by external/mobile clients)
@@ -174,6 +217,756 @@ app.get("/api/get-genres", async (req, res) => {
       }
     } catch (_) {}
     return res.status(500).json({ error: "Failed to load genres", details: String(err) });
+  }
+});
+
+// --- Dynamic Hero Banner Endpoints ---
+
+// Get Hero Config (Public, cache-busted, used by developer client app)
+app.get("/api/get-hero-config", async (req, res) => {
+  const owner = process.env.GITHUB_OWNER;
+  const repo = process.env.GITHUB_REPO;
+  const branch = process.env.GITHUB_BRANCH || "main";
+  const githubToken = process.env.GITHUB_TOKEN;
+  const filePath = process.env.GITHUB_HERO_FILE_PATH || "hero_config.json";
+
+  res.setHeader("Cache-Control", "no-store, no-cache, must-revalidate, proxy-revalidate");
+  res.setHeader("Pragma", "no-cache");
+  res.setHeader("Expires", "0");
+
+  const missing = [];
+  if (!owner) missing.push("GITHUB_OWNER");
+  if (!repo) missing.push("GITHUB_REPO");
+
+  // Local fallback if GitHub credentials are not configured
+  if (missing.length > 0) {
+    try {
+      const localPath = path.join(process.cwd(), filePath);
+      if (fs.existsSync(localPath)) {
+        const fileContent = fs.readFileSync(localPath, "utf-8");
+        return res.json(JSON.parse(fileContent));
+      } else {
+        return res.json(DEFAULT_HERO_CONFIG);
+      }
+    } catch (localErr: any) {
+      return res.status(500).json({ error: "Failed to load local fallback hero config", details: String(localErr) });
+    }
+  }
+
+  try {
+    const rawUrl = `https://raw.githubusercontent.com/${owner}/${repo}/${branch}/${filePath}`;
+    const headers: Record<string, string> = {
+      "User-Agent": "Hero-Config-Admin-Dashboard"
+    };
+    if (githubToken) {
+      headers["Authorization"] = `token ${githubToken}`;
+    }
+
+    const r = await fetch(rawUrl, { headers, cache: "no-store" });
+
+    if (!r.ok) {
+      const localPath = path.join(process.cwd(), filePath);
+      if (fs.existsSync(localPath)) {
+        const fileContent = fs.readFileSync(localPath, "utf-8");
+        return res.json(JSON.parse(fileContent));
+      }
+      return res.json(DEFAULT_HERO_CONFIG);
+    }
+
+    const json = await r.json();
+    return res.json(json);
+  } catch (err: any) {
+    try {
+      const localPath = path.join(process.cwd(), filePath);
+      if (fs.existsSync(localPath)) {
+        const fileContent = fs.readFileSync(localPath, "utf-8");
+        return res.json(JSON.parse(fileContent));
+      }
+    } catch (_) {}
+    return res.status(500).json({ error: "Failed to load hero config", details: String(err) });
+  }
+});
+
+// Update Hero Config (Admin Auth, commits update to GitHub or saves locally)
+app.post("/api/github/update-hero-config", verifyAdmin, async (req, res) => {
+  const { hero_config, commitMessage } = req.body;
+
+  if (!hero_config) {
+    return res.status(400).json({ success: false, error: "Missing parameter: hero_config is required." });
+  }
+
+  // Pre-resolve all pinned items to populate the nested "drama" object before committing
+  const pinnedItems = hero_config.pinned_items || [];
+  const updatedItems = [];
+  for (const item of pinnedItems) {
+    const dId = item.drama_id;
+    if (dId) {
+      try {
+        const details = await fetchDramaDetails(dId, item.drama?.type || "tv");
+        const dramaYear = details.release_date ? parseInt(details.release_date.split("-")[0], 10) : 2024;
+        updatedItems.push({
+          drama_id: dId,
+          position: item.position,
+          drama: {
+            slug: `${details.type}-${dId}`,
+            title: details.title,
+            poster_url: details.poster_path,
+            backdrop_url: details.backdrop_path,
+            rating: Number(details.vote_average) || 0.0,
+            year: isNaN(dramaYear) ? 2024 : dramaYear,
+            type: details.type || "tv",
+            country: details.country || "KR"
+          }
+        });
+      } catch (err) {
+        console.error(`Error resolving ${dId} on save:`, err);
+        updatedItems.push(item);
+      }
+    } else {
+      updatedItems.push(item);
+    }
+  }
+  hero_config.pinned_items = updatedItems;
+
+  const owner = process.env.GITHUB_OWNER;
+  const repo = process.env.GITHUB_REPO;
+  const branch = process.env.GITHUB_BRANCH || "main";
+  const githubToken = process.env.GITHUB_TOKEN;
+  const filePath = process.env.GITHUB_HERO_FILE_PATH || "hero_config.json";
+
+  const missing = [];
+  if (!owner) missing.push("GITHUB_OWNER");
+  if (!repo) missing.push("GITHUB_REPO");
+  if (!githubToken) missing.push("GITHUB_TOKEN");
+
+  const fullConfig = { hero_config };
+
+  // Local fallback if GitHub secrets are missing
+  if (missing.length > 0) {
+    try {
+      const localPath = path.join(process.cwd(), filePath);
+      fs.writeFileSync(localPath, JSON.stringify(fullConfig, null, 2), "utf-8");
+
+      return res.json({
+        success: true,
+        message: "Successfully updated local hero_config.json file (Development Mode).",
+        isLocalFallback: true,
+        data: fullConfig
+      });
+    } catch (localErr: any) {
+      console.error("Local fallback hero_config write failed:", localErr);
+      return res.status(500).json({ success: false, error: "Failed to save local hero config.", details: String(localErr) });
+    }
+  }
+
+  const headers = {
+    "Accept": "application/vnd.github.v3+json",
+    "Authorization": `token ${githubToken}`,
+    "User-Agent": "Hero-Config-Admin-Dashboard",
+    "Content-Type": "application/json"
+  };
+
+  const getUrl = `https://api.github.com/repos/${owner}/${repo}/contents/${filePath}?ref=${branch}`;
+
+  try {
+    // Fetch current state of file to resolve SHA
+    console.log(`GitHub Hero Config Update: Fetching current state of file to resolve SHA...`);
+    const getResponse = await fetch(getUrl, { headers: { ...headers, "Content-Type": undefined } as any });
+
+    let currentSha = "";
+    if (getResponse.ok) {
+      const fileData = await getResponse.json() as any;
+      currentSha = fileData.sha;
+    }
+
+    // Convert to pretty base64
+    const updatedJsonString = JSON.stringify(fullConfig, null, 2);
+    const updatedBase64 = Buffer.from(updatedJsonString, "utf-8").toString("base64");
+
+    // PUT commit update
+    const putUrl = `https://api.github.com/repos/${owner}/${repo}/contents/${filePath}`;
+    const payload: any = {
+      message: commitMessage || `Admin UI: Update dynamic hero configuration`,
+      content: updatedBase64,
+      branch: branch
+    };
+
+    if (currentSha) {
+      payload.sha = currentSha;
+    }
+
+    console.log(`GitHub Hero Config Update: Sending PUT commit request to: ${putUrl}`);
+    const putResponse = await fetch(putUrl, {
+      method: "PUT",
+      headers,
+      body: JSON.stringify(payload)
+    });
+
+    if (!putResponse.ok) {
+      const errText = await putResponse.text();
+      return res.status(putResponse.status).json({
+        success: false,
+        error: `GitHub PUT commit failed (${putResponse.status}): ${errText}`
+      });
+    }
+
+    const putResult = await putResponse.json() as any;
+    res.json({
+      success: true,
+      message: "Successfully committed hero configuration to GitHub repository!",
+      commitSha: putResult.commit.sha,
+      htmlUrl: putResult.content.html_url,
+      data: fullConfig
+    });
+  } catch (err: any) {
+    console.error("Error committing hero config to GitHub:", err);
+    res.status(500).json({ success: false, error: err.message || "Internal server error during GitHub hero config commit." });
+  }
+});
+
+// Sync and refresh all nested drama metadata inside the current config, then save/commit it!
+app.post("/api/github/sync-hero-metadata", verifyAdmin, async (req, res) => {
+  const owner = process.env.GITHUB_OWNER;
+  const repo = process.env.GITHUB_REPO;
+  const branch = process.env.GITHUB_BRANCH || "main";
+  const githubToken = process.env.GITHUB_TOKEN;
+  const filePath = process.env.GITHUB_HERO_FILE_PATH || "hero_config.json";
+
+  // First, load active config
+  let activeConfig: any = null;
+  try {
+    const localPath = path.join(process.cwd(), filePath);
+    if (fs.existsSync(localPath)) {
+      const fileContent = fs.readFileSync(localPath, "utf-8");
+      activeConfig = JSON.parse(fileContent);
+    }
+  } catch (err) {
+    console.warn("Failed to read active config locally:", err);
+  }
+
+  // Fallback to fetch from GitHub if local file doesn't exist or is empty
+  if (!activeConfig && owner && repo) {
+    try {
+      const rawUrl = `https://raw.githubusercontent.com/${owner}/${repo}/${branch}/${filePath}`;
+      const headers: Record<string, string> = {
+        "User-Agent": "Hero-Config-Admin-Dashboard"
+      };
+      if (githubToken) {
+        headers["Authorization"] = `token ${githubToken}`;
+      }
+      const r = await fetch(rawUrl, { headers, cache: "no-store" });
+      if (r.ok) {
+        activeConfig = await r.json();
+      }
+    } catch (err) {
+      console.warn("Failed to fetch active config from GitHub:", err);
+    }
+  }
+
+  if (!activeConfig || !activeConfig.hero_config) {
+    activeConfig = JSON.parse(JSON.stringify(DEFAULT_HERO_CONFIG));
+  }
+
+  const pinnedItems = activeConfig.hero_config.pinned_items || [];
+  const updatedItems = [];
+
+  console.log(`Syncing metadata for ${pinnedItems.length} pinned items...`);
+
+  for (const item of pinnedItems) {
+    const dId = item.drama_id;
+    if (dId) {
+      try {
+        const details = await fetchDramaDetails(dId, item.drama?.type || "tv");
+        const dramaYear = details.release_date ? parseInt(details.release_date.split("-")[0], 10) : 2024;
+        
+        updatedItems.push({
+          drama_id: dId,
+          position: item.position,
+          drama: {
+            slug: `${details.type}-${dId}`,
+            title: details.title,
+            poster_url: details.poster_path,
+            backdrop_url: details.backdrop_path,
+            rating: Number(details.vote_average) || 0.0,
+            year: isNaN(dramaYear) ? 2024 : dramaYear,
+            type: details.type || "tv",
+            country: details.country || "KR"
+          }
+        });
+      } catch (err) {
+        console.error(`Error resolving ${dId} during sync:`, err);
+        updatedItems.push(item);
+      }
+    } else {
+      updatedItems.push(item);
+    }
+  }
+
+  activeConfig.hero_config.pinned_items = updatedItems;
+
+  // Save the synchronized config back to GitHub or locally
+  const missing = [];
+  if (!owner) missing.push("GITHUB_OWNER");
+  if (!repo) missing.push("GITHUB_REPO");
+  if (!githubToken) missing.push("GITHUB_TOKEN");
+
+  if (missing.length > 0) {
+    try {
+      const localPath = path.join(process.cwd(), filePath);
+      fs.writeFileSync(localPath, JSON.stringify(activeConfig, null, 2), "utf-8");
+      return res.json({
+        success: true,
+        message: "Successfully synchronized and saved local hero_config.json file (Development Mode).",
+        isLocalFallback: true,
+        data: activeConfig
+      });
+    } catch (localErr: any) {
+      return res.status(500).json({ success: false, error: "Failed to save local hero config.", details: String(localErr) });
+    }
+  }
+
+  const headers = {
+    "Accept": "application/vnd.github.v3+json",
+    "Authorization": `token ${githubToken}`,
+    "User-Agent": "Hero-Config-Admin-Dashboard",
+    "Content-Type": "application/json"
+  };
+
+  const getUrl = `https://api.github.com/repos/${owner}/${repo}/contents/${filePath}?ref=${branch}`;
+
+  try {
+    const getResponse = await fetch(getUrl, { headers: { ...headers, "Content-Type": undefined } as any });
+    let currentSha = "";
+    if (getResponse.ok) {
+      const fileData = await getResponse.json() as any;
+      currentSha = fileData.sha;
+    }
+
+    const updatedJsonString = JSON.stringify(activeConfig, null, 2);
+    const updatedBase64 = Buffer.from(updatedJsonString, "utf-8").toString("base64");
+
+    const putUrl = `https://api.github.com/repos/${owner}/${repo}/contents/${filePath}`;
+    const payload: any = {
+      message: `Admin UI: Sync and update pinned TMDB drama metadata`,
+      content: updatedBase64,
+      branch: branch
+    };
+
+    if (currentSha) {
+      payload.sha = currentSha;
+    }
+
+    const putResponse = await fetch(putUrl, {
+      method: "PUT",
+      headers,
+      body: JSON.stringify(payload)
+    });
+
+    if (!putResponse.ok) {
+      const errText = await putResponse.text();
+      return res.status(putResponse.status).json({
+        success: false,
+        error: `GitHub PUT commit failed: ${errText}`
+      });
+    }
+
+    res.json({
+      success: true,
+      message: "Successfully synchronized metadata and committed to GitHub repository!",
+      data: activeConfig
+    });
+  } catch (err: any) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// --- TMDB API Proxy & Gemini Fallback Endpoints ---
+
+const TMDB_IMAGE_BASE_W500 = "https://image.tmdb.org/t/p/w500";
+const TMDB_IMAGE_BASE_W1280 = "https://image.tmdb.org/t/p/w1280";
+
+const STATIC_POPULAR_DRAMAS = [
+  {
+    id: "111837",
+    title: "Queen of Tears",
+    type: "tv",
+    poster_path: "https://images.unsplash.com/photo-1518156677180-95a2893f3e9f?q=80&w=600",
+    backdrop_path: "https://images.unsplash.com/photo-1492691527719-9d1e07e534b4?q=80&w=1200",
+    release_date: "2024-03-09",
+    overview: "The queen of department stores and her small-town husband weather a marital crisis — until love miraculously begins to bloom again.",
+    genres: ["Drama", "Comedy", "Romance"],
+    vote_average: 8.5
+  },
+  {
+    id: "94605",
+    title: "Sweet Home",
+    type: "tv",
+    poster_path: "https://images.unsplash.com/photo-1509248961158-e54f6934749c?q=80&w=600",
+    backdrop_path: "https://images.unsplash.com/photo-1536440136628-849c177e76a1?q=80&w=1200",
+    release_date: "2020-12-18",
+    overview: "As humans turn into savage monsters and wreak terror, one troubled teen and his apartment neighbors fight to survive — and to hold on to their humanity.",
+    genres: ["Sci-Fi & Fantasy", "Drama", "Mystery"],
+    vote_average: 8.4
+  },
+  {
+    id: "96648",
+    title: "Squid Game",
+    type: "tv",
+    poster_path: "https://images.unsplash.com/photo-1511512578047-dfb367046420?q=80&w=600",
+    backdrop_path: "https://images.unsplash.com/photo-1518709268805-4e9042af9f23?q=80&w=1200",
+    release_date: "2021-09-17",
+    overview: "Hundreds of cash-strapped players accept a strange invitation to compete in children's games. Inside, a tempting prize awaits — with deadly high stakes.",
+    genres: ["Action & Adventure", "Mystery", "Drama"],
+    vote_average: 8.7
+  },
+  {
+    id: "117376",
+    title: "Vincenzo",
+    type: "tv",
+    poster_path: "https://images.unsplash.com/photo-1485846234645-a62644f84728?q=80&w=600",
+    backdrop_path: "https://images.unsplash.com/photo-1507679799987-c73779587ccf?q=80&w=1200",
+    release_date: "2021-02-20",
+    overview: "During a visit to his homeland, a Korean-Italian mafia lawyer gives an unrivaled conglomerate a taste of its own medicine with a side of justice.",
+    genres: ["Comedy", "Crime", "Drama"],
+    vote_average: 8.5
+  },
+  {
+    id: "212151",
+    title: "My Demon",
+    type: "tv",
+    poster_path: "https://images.unsplash.com/photo-1516589178581-6cd7833ae3b2?q=80&w=600",
+    backdrop_path: "https://images.unsplash.com/photo-1534447677768-be436bb09401?q=80&w=1200",
+    release_date: "2023-11-24",
+    overview: "A pitiless demon becomes powerless after getting entangled with a frigid heiress, who may hold the key to his lost abilities — and his heart.",
+    genres: ["Sci-Fi & Fantasy", "Drama", "Comedy"],
+    vote_average: 8.6
+  }
+];
+
+// Helper to construct TMDB image URLs
+const formatTmdbImage = (imgpath: string | null, size: "poster" | "backdrop"): string => {
+  if (!imgpath) return "";
+  if (imgpath.startsWith("http")) return imgpath;
+  return size === "poster" ? `${TMDB_IMAGE_BASE_W500}${imgpath}` : `${TMDB_IMAGE_BASE_W1280}${imgpath}`;
+};
+
+// Search Movies & TV Shows (Public endpoint)
+app.get("/api/tmdb/search", async (req, res) => {
+  const query = req.query.query as string;
+  if (!query || !query.trim()) {
+    return res.status(400).json({ error: "Missing required query parameter: query" });
+  }
+
+  const tmdbKey = process.env.TMDB_API_KEY;
+
+  if (tmdbKey && tmdbKey !== "") {
+    try {
+      console.log(`Searching TMDB for: "${query}" using configured API key`);
+      const tmdbUrl = `https://api.themoviedb.org/3/search/multi?api_key=${tmdbKey}&query=${encodeURIComponent(query)}&language=en-US`;
+      const response = await fetch(tmdbUrl);
+      if (response.ok) {
+        const data = await response.json() as any;
+        const results = (data.results || [])
+          .filter((item: any) => item.media_type === "tv" || item.media_type === "movie")
+          .map((item: any) => ({
+            id: String(item.id),
+            title: item.name || item.title || "Untitled",
+            type: item.media_type,
+            poster_path: formatTmdbImage(item.poster_path, "poster") || "https://images.unsplash.com/photo-1594909122845-11baa439b7bf?q=80&w=600",
+            backdrop_path: formatTmdbImage(item.backdrop_path, "backdrop") || "https://images.unsplash.com/photo-1492691527719-9d1e07e534b4?q=80&w=1200",
+            release_date: item.first_air_date || item.release_date || "",
+            overview: item.overview || ""
+          }));
+        return res.json({ success: true, results, source: "tmdb" });
+      } else {
+        console.warn(`TMDB search API responded with status ${response.status}. Falling back to Gemini/Static.`);
+      }
+    } catch (err: any) {
+      console.error("TMDB API Search request failed, attempting fallback:", err);
+    }
+  }
+
+  // Fallback A: Gemini Synthesis
+  if (ai) {
+    try {
+      console.log(`Calling Gemini API to synthesize TMDB search results for query: "${query}"`);
+      const prompt = `The user is building a K-Drama dashboard called HanZone. Search TMDB index or generate top-tier search results matching drama or movie query: "${query}". Return between 3 and 6 highly realistic matching entries.
+      Be extremely accurate with actual TMDB IDs, true show names, true release years, and real descriptions if they correspond to known Korean/Asian dramas or global films. For the poster_path and backdrop_path, use high-quality, fully-qualified Unsplash image URLs representing theatrical, romantic, sci-fi, or urban aesthetics.
+
+      Provide output strictly matching this JSON schema:
+      [
+        {
+          "id": "real_numeric_id_string_or_believable_id",
+          "title": "Exact Show/Movie Name",
+          "type": "tv" or "movie",
+          "poster_path": "https://images.unsplash.com/...",
+          "backdrop_path": "https://images.unsplash.com/...",
+          "release_date": "YYYY-MM-DD",
+          "overview": "Enchanting 2-3 sentence overview..."
+        }
+      ]`;
+
+      const response = await ai.models.generateContent({
+        model: "gemini-3.5-flash",
+        contents: prompt,
+        config: {
+          responseMimeType: "application/json"
+        }
+      });
+
+      const text = response.text;
+      if (text) {
+        const results = JSON.parse(text);
+        return res.json({ success: true, results, source: "gemini_synthesis" });
+      }
+    } catch (geminiErr: any) {
+      console.error("Gemini Search Synthesis failed:", geminiErr);
+    }
+  }
+
+  // Fallback B: Local filtering of popular curation
+  console.log(`Both TMDB & Gemini unavailable/failed. Running local string search in popular static dramas.`);
+  const q = query.toLowerCase();
+  const matched = STATIC_POPULAR_DRAMAS.filter(
+    item => item.title.toLowerCase().includes(q) || item.overview.toLowerCase().includes(q)
+  );
+  
+  if (matched.length === 0) {
+    matched.push({
+      id: "999" + Math.floor(Math.random() * 1000),
+      title: query,
+      type: "tv",
+      poster_path: "https://images.unsplash.com/photo-1594909122845-11baa439b7bf?q=80&w=600",
+      backdrop_path: "https://images.unsplash.com/photo-1492691527719-9d1e07e534b4?q=80&w=1200",
+      release_date: new Date().toISOString().split("T")[0],
+      overview: `A thrilling drama exploring the themes of "${query}". Hand-curated and dynamically resolved by HanZone server.`,
+      genres: ["Drama"],
+      vote_average: 8.0
+    });
+  }
+
+  return res.json({ success: true, results: matched, source: "static_fallback" });
+});
+
+// Helper function to fetch detailed drama/movie metadata with TMDB key or fallbacks
+async function fetchDramaDetails(id: string, typeHint: string = "tv"): Promise<any> {
+  const cacheKey = `${id}_${typeHint}`;
+  if (tmdbDetailsCache[cacheKey]) {
+    return tmdbDetailsCache[cacheKey];
+  }
+
+  // Check if ID is a non-numeric/mock ID or contains letters
+  const isMockId = !/^\d+$/.test(id);
+  if (isMockId) {
+    if (id.includes("123")) {
+      return {
+        id,
+        title: "Guardian: The Lonely and Great God",
+        type: typeHint,
+        poster_path: "https://images.unsplash.com/photo-1594909122845-11baa439b7bf?q=80&w=600",
+        backdrop_path: "https://images.unsplash.com/photo-1492691527719-9d1e07e534b4?q=80&w=1200",
+        release_date: "2016-12-02",
+        overview: "Kim Shin, an immortal goblin who is protector of souls, goes on a quest to find his human bride, the only one who can pull out the sword that keeps him immortal.",
+        genres: ["Drama", "Fantasy", "Romance"],
+        vote_average: 9.1,
+        country: "KR"
+      };
+    }
+    if (id.includes("456")) {
+      return {
+        id,
+        title: "Crash Landing on You",
+        type: typeHint,
+        poster_path: "https://images.unsplash.com/photo-1594909122845-11baa439b7bf?q=80&w=600",
+        backdrop_path: "https://images.unsplash.com/photo-1492691527719-9d1e07e534b4?q=80&w=1200",
+        release_date: "2019-12-14",
+        overview: "A paragliding mishap drops a South Korean heiress in North Korea - and into the life of an army officer, who decides he will help her hide.",
+        genres: ["Drama", "Comedy", "Romance"],
+        vote_average: 8.9,
+        country: "KR"
+      };
+    }
+    
+    const cleanName = id
+      .replace(/^drama_/, "")
+      .replace(/_id$/, "")
+      .split(/[_-]/)
+      .map(word => word.charAt(0).toUpperCase() + word.slice(1))
+      .join(" ");
+
+    return {
+      id,
+      title: cleanName || "Chronicles of HanZone",
+      type: typeHint,
+      poster_path: "https://images.unsplash.com/photo-1594909122845-11baa439b7bf?q=80&w=600",
+      backdrop_path: "https://images.unsplash.com/photo-1492691527719-9d1e07e534b4?q=80&w=1200",
+      release_date: "2024-01-01",
+      overview: `A thrilling cinematic masterpiece titled "${cleanName || "Chronicles of HanZone"}", following complex characters entangled in destiny and intrigue across breathtaking Asian landscapes.`,
+      genres: ["Drama", "Mystery", "Thriller"],
+      vote_average: 8.5,
+      country: "KR"
+    };
+  }
+
+  // A. TMDB Key Resolution
+  const tmdbKey = process.env.TMDB_API_KEY;
+  if (tmdbKey && tmdbKey !== "") {
+    try {
+      const tmdbUrl = `https://api.themoviedb.org/3/${typeHint}/${id}?api_key=${tmdbKey}&language=en-US`;
+      const response = await fetch(tmdbUrl);
+      
+      if (response.ok) {
+        const item = await response.json() as any;
+        const origin_country = item.origin_country?.[0] || item.production_countries?.[0]?.iso_3166_1 || "KR";
+        const result = {
+          id: String(item.id),
+          title: item.name || item.title || "Untitled Show",
+          type: typeHint,
+          poster_path: formatTmdbImage(item.poster_path, "poster") || "https://images.unsplash.com/photo-1594909122845-11baa439b7bf?q=80&w=600",
+          backdrop_path: formatTmdbImage(item.backdrop_path, "backdrop") || "https://images.unsplash.com/photo-1492691527719-9d1e07e534b4?q=80&w=1200",
+          release_date: item.first_air_date || item.release_date || "",
+          overview: item.overview || "",
+          genres: (item.genres || []).map((g: any) => g.name),
+          vote_average: item.vote_average || 0.0,
+          country: origin_country
+        };
+        tmdbDetailsCache[cacheKey] = result;
+        return result;
+      } else {
+        // Try fallback type in case they passed the wrong type Hint (tv vs movie)
+        const alternateType = typeHint === "tv" ? "movie" : "tv";
+        const fallbackUrl = `https://api.themoviedb.org/3/${alternateType}/${id}?api_key=${tmdbKey}&language=en-US`;
+        const fbResponse = await fetch(fallbackUrl);
+        if (fbResponse.ok) {
+          const item = await fbResponse.json() as any;
+          const origin_country = item.origin_country?.[0] || item.production_countries?.[0]?.iso_3166_1 || "KR";
+          const result = {
+            id: String(item.id),
+            title: item.name || item.title || "Untitled Show",
+            type: alternateType,
+            poster_path: formatTmdbImage(item.poster_path, "poster") || "https://images.unsplash.com/photo-1594909122845-11baa439b7bf?q=80&w=600",
+            backdrop_path: formatTmdbImage(item.backdrop_path, "backdrop") || "https://images.unsplash.com/photo-1492691527719-9d1e07e534b4?q=80&w=1200",
+            release_date: item.first_air_date || item.release_date || "",
+            overview: item.overview || "",
+            genres: (item.genres || []).map((g: any) => g.name),
+            vote_average: item.vote_average || 0.0,
+            country: origin_country
+          };
+          tmdbDetailsCache[cacheKey] = result;
+          return result;
+        }
+      }
+    } catch (err: any) {
+      console.error(`TMDB details query failed for ID ${id}:`, err);
+    }
+  }
+
+  // B. Static Curated Fallback
+  const staticFound = STATIC_POPULAR_DRAMAS.find(item => item.id === id);
+  if (staticFound) {
+    const enrichedStatic = { ...staticFound, country: (staticFound as any).country || "KR" };
+    tmdbDetailsCache[cacheKey] = enrichedStatic;
+    return enrichedStatic;
+  }
+
+  // C. Gemini synthesis Fallback
+  if (ai) {
+    try {
+      const prompt = `Synthesize TMDB details for TV show/movie with ID: "${id}".
+      If this ID corresponds to a famous K-Drama or movie, generate its exact title, overview, release date, genres, and realistic ratings. (e.g. 111837 is Queen of Tears, 94605 is Sweet Home, 96648 is Squid Game, 117376 is Vincenzo, 212151 is My Demon).
+      If the ID is unrecognized, synthesize a beautiful, premium, highly realistic Korean/Asian drama name and plot.
+      For images, provide high-quality Unsplash image URLs that represent cinematic aesthetics.
+
+      Provide output strictly matching this JSON schema:
+      {
+        "id": "${id}",
+        "title": "Exact or synthesized title",
+        "type": "tv" or "movie",
+        "poster_path": "https://images.unsplash.com/...",
+        "backdrop_path": "https://images.unsplash.com/...",
+        "release_date": "YYYY-MM-DD",
+        "overview": "Detailed show plot summary...",
+        "genres": ["Drama", "Romance"],
+        "vote_average": 8.5,
+        "country": "KR"
+      }`;
+
+      const response = await ai.models.generateContent({
+        model: "gemini-3.5-flash",
+        contents: prompt,
+        config: {
+          responseMimeType: "application/json"
+        }
+      });
+
+      const text = response.text;
+      if (text) {
+        const result = JSON.parse(text);
+        if (!result.country) result.country = "KR";
+        tmdbDetailsCache[cacheKey] = result;
+        return result;
+      }
+    } catch (geminiErr: any) {
+      console.warn(`Gemini Details Synthesis failed for ID "${id}":`, geminiErr);
+    }
+  }
+
+  // D. Safe hard fallback (Default Mock Item)
+  const fallback = {
+    id,
+    title: `Drama (ID: ${id})`,
+    type: typeHint,
+    poster_path: "https://images.unsplash.com/photo-1594909122845-11baa439b7bf?q=80&w=600",
+    backdrop_path: "https://images.unsplash.com/photo-1492691527719-9d1e07e534b4?q=80&w=1200",
+    release_date: "2024-01-01",
+    overview: "A captivating drama series dynamically loaded from the HanZone content repository. Full information can be pulled with a configured TMDB API key.",
+    genres: ["Drama", "Action"],
+    vote_average: 8.0,
+    country: "KR"
+  };
+  tmdbDetailsCache[cacheKey] = fallback;
+  return fallback;
+}
+
+// Fetch detailed metadata by TMDB ID (Public endpoint)
+app.get("/api/tmdb/details", async (req, res) => {
+  const id = req.query.id as string;
+  const typeHint = (req.query.type as string) || "tv";
+
+  if (!id || !id.trim()) {
+    return res.status(400).json({ error: "Missing required parameter: id" });
+  }
+
+  const cacheKey = `${id}_${typeHint}`;
+
+  // Check in-memory cache first
+  if (tmdbDetailsCache[cacheKey]) {
+    console.log(`[Details Cache] Serving details for ID: "${id}" from cache.`);
+    return res.json({ success: true, data: tmdbDetailsCache[cacheKey], source: "memory_cache" });
+  }
+
+  // Coalesce concurrent requests for the exact same resource ID to avoid multiple parallel API requests
+  if (inFlightDetails[cacheKey]) {
+    try {
+      console.log(`[Details Coalescing] Awaiting in-flight resolution for ID: "${id}".`);
+      const data = await inFlightDetails[cacheKey];
+      return res.json({ success: true, data, source: "coalesced_request" });
+    } catch (err: any) {
+      console.warn(`[Details Coalescing] Coalesced promise rejected for ID "${id}", retrying directly...`);
+    }
+  }
+
+  const promise = fetchDramaDetails(id, typeHint);
+  inFlightDetails[cacheKey] = promise;
+
+  try {
+    const result = await promise;
+    delete inFlightDetails[cacheKey];
+    return res.json({ success: true, data: result, source: "resolved" });
+  } catch (err: any) {
+    delete inFlightDetails[cacheKey];
+    console.error(`Failed resolving details resolver for ID "${id}":`, err);
+    return res.status(500).json({ success: false, error: err.message || "Failed resolving details." });
   }
 });
 
