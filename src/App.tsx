@@ -52,6 +52,7 @@ import {
   Sliders,
   Pin,
   Tv,
+  Film,
   GripVertical,
   Video,
   Link,
@@ -192,7 +193,7 @@ export default function App() {
   const [newPinnedPosition, setNewPinnedPosition] = useState<number>(1);
 
   // Media Stream Injector States
-  const [dramaLinks, setDramaLinks] = useState<Record<string, { stream_url: string | null; download_url: string | null; title?: string }>>({});
+  const [dramaLinks, setDramaLinks] = useState<Record<string, { stream_url: string | null; download_url: string | null; title?: string; seasons?: any }>>({});
   const [linksLoading, setLinksLoading] = useState<boolean>(false);
   const [linksSaving, setLinksSaving] = useState<boolean>(false);
   const [linksMessage, setLinksMessage] = useState<{ text: string; type: "success" | "error" } | null>(null);
@@ -203,6 +204,14 @@ export default function App() {
   const [linkStreamUrl, setLinkStreamUrl] = useState<string>("");
   const [linkDownloadUrl, setLinkDownloadUrl] = useState<string>("");
   const [linkEditingId, setLinkEditingId] = useState<string | null>(null);
+  
+  // Episode-specific state additions for TV series
+  const [linkMediaType, setLinkMediaType] = useState<"movie" | "tv">("movie");
+  const [customSeasons, setCustomSeasons] = useState<Record<string, Record<string, { stream_url?: string; download_url?: string }>>>({});
+  const [tempSeason, setTempSeason] = useState<string>("1");
+  const [tempEpisode, setTempEpisode] = useState<string>("1");
+  const [tempEpisodeStreamUrl, setTempEpisodeStreamUrl] = useState<string>("");
+  const [tempEpisodeDownloadUrl, setTempEpisodeDownloadUrl] = useState<string>("");
 
   // Dynamic Home Layout States
   const [homeLayout, setHomeLayout] = useState<any[]>([]);
@@ -564,7 +573,8 @@ export default function App() {
           id: linkDramaId.trim(),
           title: linkTitle.trim() || undefined,
           stream_url: linkStreamUrl.trim() || null,
-          download_url: linkDownloadUrl.trim() || null
+          download_url: linkDownloadUrl.trim() || null,
+          seasons: linkMediaType === "tv" ? customSeasons : null
         })
       });
       const data = await response.json();
@@ -577,6 +587,10 @@ export default function App() {
         setLinkStreamUrl("");
         setLinkDownloadUrl("");
         setLinkEditingId(null);
+        setLinkMediaType("movie");
+        setCustomSeasons({});
+        setTempEpisodeStreamUrl("");
+        setTempEpisodeDownloadUrl("");
       } else {
         setLinksMessage({ text: data.error || "Failed to save link configuration.", type: "error" });
       }
@@ -585,6 +599,51 @@ export default function App() {
     } finally {
       setLinksSaving(false);
     }
+  };
+
+  // Add an episode link to the local customSeasons state
+  const handleAddEpisodeToSeason = () => {
+    if (!tempSeason.trim() || !tempEpisode.trim()) {
+      alert("Season and Episode numbers are required.");
+      return;
+    }
+    const sNum = tempSeason.trim();
+    const eNum = tempEpisode.trim();
+
+    setCustomSeasons((prev) => {
+      const updated = { ...prev };
+      if (!updated[sNum]) {
+        updated[sNum] = {};
+      }
+      updated[sNum][eNum] = {
+        stream_url: tempEpisodeStreamUrl.trim() || undefined,
+        download_url: tempEpisodeDownloadUrl.trim() || undefined,
+      };
+      return updated;
+    });
+
+    // Reset episode inputs for next entry, incrementing episode number automatically for convenience!
+    setTempEpisodeStreamUrl("");
+    setTempEpisodeDownloadUrl("");
+    const parsedEp = parseInt(eNum, 10);
+    if (!isNaN(parsedEp)) {
+      setTempEpisode(String(parsedEp + 1));
+    }
+  };
+
+  // Remove an episode from the local customSeasons state
+  const handleRemoveEpisodeFromSeason = (seasonNum: string, episodeNum: string) => {
+    setCustomSeasons((prev) => {
+      const updated = { ...prev };
+      if (updated[seasonNum]) {
+        delete updated[seasonNum][episodeNum];
+        // If the season becomes empty, delete the season object too
+        if (Object.keys(updated[seasonNum]).length === 0) {
+          delete updated[seasonNum];
+        }
+      }
+      return updated;
+    });
   };
 
   // Delete a customized link
@@ -3783,6 +3842,36 @@ export default function App() {
                     {linkEditingId ? "Edit Custom Links" : "Inject New Drama Links"}
                   </h3>
 
+                  <div className="flex flex-col gap-1.5">
+                    <label className="text-[11px] font-bold text-slate-400">Media Injection Type</label>
+                    <div className="grid grid-cols-2 gap-2 p-1 rounded-xl bg-slate-500/5 border border-slate-700/10">
+                      <button
+                        type="button"
+                        onClick={() => setLinkMediaType("movie")}
+                        className={`py-2 px-3 rounded-lg text-xs font-bold transition-all flex items-center justify-center gap-1.5 ${
+                          linkMediaType === "movie"
+                            ? (isDark ? "bg-indigo-600 text-white shadow" : "bg-white text-indigo-600 shadow-sm border border-slate-200")
+                            : "text-slate-400 hover:text-slate-300"
+                        }`}
+                      >
+                        <Film className="w-3.5 h-3.5" />
+                        Movie / Single
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setLinkMediaType("tv")}
+                        className={`py-2 px-3 rounded-lg text-xs font-bold transition-all flex items-center justify-center gap-1.5 ${
+                          linkMediaType === "tv"
+                            ? (isDark ? "bg-indigo-600 text-white shadow" : "bg-white text-indigo-600 shadow-sm border border-slate-200")
+                            : "text-slate-400 hover:text-slate-300"
+                        }`}
+                      >
+                        <Tv className="w-3.5 h-3.5" />
+                        TV Show / Episodes
+                      </button>
+                    </div>
+                  </div>
+
                   <div className="flex flex-col gap-1">
                     <label className="text-[11px] font-bold text-slate-400">TMDB ID *</label>
                     <input
@@ -3818,7 +3907,9 @@ export default function App() {
                   </div>
 
                   <div className="flex flex-col gap-1">
-                    <label className="text-[11px] font-bold text-slate-400">Direct Stream URL (stream_url)</label>
+                    <label className="text-[11px] font-bold text-slate-400">
+                      {linkMediaType === "tv" ? "Default/Fallback Stream URL (stream_url)" : "Direct Stream URL (stream_url)"}
+                    </label>
                     <input
                       type="url"
                       placeholder="https://example.com/stream.m3u8"
@@ -3834,7 +3925,9 @@ export default function App() {
                   </div>
 
                   <div className="flex flex-col gap-1">
-                    <label className="text-[11px] font-bold text-slate-400">Direct Download URL (download_url)</label>
+                    <label className="text-[11px] font-bold text-slate-400">
+                      {linkMediaType === "tv" ? "Default/Fallback Download URL (download_url)" : "Direct Download URL (download_url)"}
+                    </label>
                     <input
                       type="url"
                       placeholder="https://example.com/download.mp4"
@@ -3848,6 +3941,117 @@ export default function App() {
                     />
                     <span className="text-[10px] text-slate-500 mt-0.5">Allows direct download options inside the mobile player.</span>
                   </div>
+
+                  {/* Multi-Episode Injection Section for TV Series */}
+                  {linkMediaType === "tv" && (
+                    <div className={`p-4 rounded-xl border mt-2 flex flex-col gap-3 ${
+                      isDark ? "bg-[#090f1e]/80 border-slate-700/40" : "bg-indigo-50/20 border-indigo-100"
+                    }`}>
+                      <div className="flex items-center gap-1.5 text-xs font-black text-indigo-500">
+                        <PlusCircle className="w-4 h-4 text-indigo-500" />
+                        <span>Add Season / Episode Specific Links</span>
+                      </div>
+
+                      <div className="grid grid-cols-2 gap-2">
+                        <div className="flex flex-col gap-1">
+                          <label className="text-[10px] font-bold text-slate-400">Season #</label>
+                          <input
+                            type="number"
+                            min="1"
+                            value={tempSeason}
+                            onChange={(e) => setTempSeason(e.target.value)}
+                            className={`h-8 px-2 rounded-lg text-xs font-semibold focus:outline-none transition-colors ${
+                              isDark ? "bg-[#11192e] border border-slate-700/40 text-white" : "bg-white border border-slate-200 text-slate-800"
+                            }`}
+                          />
+                        </div>
+                        <div className="flex flex-col gap-1">
+                          <label className="text-[10px] font-bold text-slate-400">Episode #</label>
+                          <input
+                            type="number"
+                            min="1"
+                            value={tempEpisode}
+                            onChange={(e) => setTempEpisode(e.target.value)}
+                            className={`h-8 px-2 rounded-lg text-xs font-semibold focus:outline-none transition-colors ${
+                              isDark ? "bg-[#11192e] border border-slate-700/40 text-white" : "bg-white border border-slate-200 text-slate-800"
+                            }`}
+                          />
+                        </div>
+                      </div>
+
+                      <div className="flex flex-col gap-1">
+                        <label className="text-[10px] font-bold text-slate-400">Episode Stream URL</label>
+                        <input
+                          type="url"
+                          placeholder="https://example.com/s1e1_stream.mp4"
+                          value={tempEpisodeStreamUrl}
+                          onChange={(e) => setTempEpisodeStreamUrl(e.target.value)}
+                          className={`h-8 px-2 rounded-lg text-xs font-medium focus:outline-none transition-colors ${
+                            isDark ? "bg-[#11192e] border border-slate-700/40 text-white" : "bg-white border border-slate-200 text-slate-800"
+                          }`}
+                        />
+                      </div>
+
+                      <div className="flex flex-col gap-1">
+                        <label className="text-[10px] font-bold text-slate-400">Episode Download URL</label>
+                        <input
+                          type="url"
+                          placeholder="https://example.com/s1e1_download.mp4"
+                          value={tempEpisodeDownloadUrl}
+                          onChange={(e) => setTempEpisodeDownloadUrl(e.target.value)}
+                          className={`h-8 px-2 rounded-lg text-xs font-medium focus:outline-none transition-colors ${
+                            isDark ? "bg-[#11192e] border border-slate-700/40 text-white" : "bg-white border border-slate-200 text-slate-800"
+                          }`}
+                        />
+                      </div>
+
+                      <button
+                        type="button"
+                        onClick={handleAddEpisodeToSeason}
+                        className="h-8 bg-indigo-600 hover:bg-indigo-500 text-white font-bold rounded-lg text-[11px] transition-all flex items-center justify-center gap-1 cursor-pointer"
+                      >
+                        <Plus className="w-3.5 h-3.5" />
+                        Inject Episode
+                      </button>
+
+                      {/* Display added episodes */}
+                      <div className="mt-2">
+                        <span className="text-[10px] font-black uppercase text-slate-400 tracking-wider">
+                          Injected Episodes ({Object.values(customSeasons).reduce((acc: number, curr: any) => acc + Object.keys(curr || {}).length, 0)})
+                        </span>
+                        
+                        <div className={`mt-1 max-h-44 overflow-y-auto rounded-lg border divide-y divide-slate-700/20 ${
+                          isDark ? "bg-[#11192e]/40 border-slate-700/30" : "bg-white border-slate-200"
+                        }`}>
+                          {Object.keys(customSeasons).length === 0 ? (
+                            <div className="p-3 text-[10px] text-center text-slate-500 font-medium">
+                              No specific episodes injected yet. Add above.
+                            </div>
+                          ) : (
+                            Object.entries(customSeasons).flatMap(([sNum, eps]) =>
+                              Object.entries(eps).map(([eNum, links]) => (
+                                <div key={`${sNum}-${eNum}`} className="p-2 flex items-center justify-between gap-2 text-[11px]">
+                                  <div className="flex flex-col">
+                                    <span className="font-bold text-indigo-400">Season {sNum}, Episode {eNum}</span>
+                                    <span className="text-[9px] text-slate-500 truncate max-w-[180px]" title={links.stream_url}>
+                                      Stream: {links.stream_url ? "Yes" : "No"} | Down: {links.download_url ? "Yes" : "No"}
+                                    </span>
+                                  </div>
+                                  <button
+                                    type="button"
+                                    onClick={() => handleRemoveEpisodeFromSeason(sNum, eNum)}
+                                    className="p-1 rounded text-rose-500 hover:bg-rose-500/10"
+                                  >
+                                    <X className="w-3.5 h-3.5" />
+                                  </button>
+                                </div>
+                              ))
+                            )
+                          )}
+                        </div>
+                      </div>
+                    </div>
+                  )}
 
                   <div className="flex items-center gap-3 mt-2">
                     <button
@@ -3868,6 +4072,10 @@ export default function App() {
                           setLinkStreamUrl("");
                           setLinkDownloadUrl("");
                           setLinkEditingId(null);
+                          setLinkMediaType("movie");
+                          setCustomSeasons({});
+                          setTempEpisodeStreamUrl("");
+                          setTempEpisodeDownloadUrl("");
                         }}
                         className={`px-4 h-11 text-xs font-bold rounded-xl transition-all cursor-pointer ${
                           isDark ? "bg-slate-800 text-slate-300 hover:bg-slate-700" : "bg-slate-100 text-slate-600 hover:bg-slate-200"
@@ -3917,7 +4125,7 @@ export default function App() {
                           </thead>
                           <tbody className="divide-y divide-slate-800/10">
                             {Object.entries(dramaLinks).map(([id, rawItem]) => {
-                              const item = rawItem as { stream_url: string | null; download_url: string | null; title?: string };
+                              const item = rawItem as { stream_url: string | null; download_url: string | null; title?: string; seasons?: any };
                               return (
                                 <tr key={id} className={`hover:bg-slate-500/5 transition-colors ${
                                   isDark ? "text-slate-200" : "text-slate-700"
@@ -3947,6 +4155,8 @@ export default function App() {
                                         setLinkStreamUrl(item.stream_url || "");
                                         setLinkDownloadUrl(item.download_url || "");
                                         setLinkEditingId(id);
+                                        setCustomSeasons(item.seasons || {});
+                                        setLinkMediaType(item.seasons && Object.keys(item.seasons).length > 0 ? "tv" : "movie");
                                       }}
                                       className={`p-1.5 rounded-lg hover:text-indigo-500 transition-colors cursor-pointer ${
                                         isDark ? "bg-slate-800 hover:bg-slate-700 text-slate-400" : "bg-slate-100 hover:bg-slate-200 text-slate-500"
