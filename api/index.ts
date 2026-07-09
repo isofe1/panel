@@ -148,6 +148,9 @@ app.get("/api/system/stats", (req, res) => {
   });
 });
 
+let cachedGenres: any[] | null = null;
+let genresLastFetched = 0;
+
 // Public endpoint to fetch genres (no-auth, bypasses CDN cache, used by external/mobile clients)
 app.get("/api/get-genres", async (req, res) => {
   const owner = process.env.GITHUB_OWNER;
@@ -161,18 +164,31 @@ app.get("/api/get-genres", async (req, res) => {
   res.setHeader("Pragma", "no-cache");
   res.setHeader("Expires", "0");
 
+  const CACHE_TTL = 30000; // 30 seconds
+  const now = Date.now();
+
+  if (cachedGenres && (now - genresLastFetched < CACHE_TTL)) {
+    return res.json(cachedGenres);
+  }
+
+  const localPath = path.join(process.cwd(), "genres.json");
+
+  // Local fallback if GitHub secrets are missing
   const missing = [];
   if (!owner) missing.push("GITHUB_OWNER");
   if (!repo) missing.push("GITHUB_REPO");
 
-  // Local fallback if GitHub secrets are missing
   if (missing.length > 0) {
     try {
-      const localPath = path.join(process.cwd(), "genres.json");
       if (fs.existsSync(localPath)) {
         const fileContent = fs.readFileSync(localPath, "utf-8");
-        return res.json(JSON.parse(fileContent));
+        const parsed = JSON.parse(fileContent);
+        cachedGenres = parsed;
+        genresLastFetched = now;
+        return res.json(parsed);
       } else {
+        cachedGenres = DEFAULT_GENRES;
+        genresLastFetched = now;
         return res.json(DEFAULT_GENRES);
       }
     } catch (localErr: any) {
@@ -181,46 +197,69 @@ app.get("/api/get-genres", async (req, res) => {
   }
 
   try {
-    // Construct Raw GitHub content URL to fetch the freshest commits bypassing any intermediary CDN proxy
-    const rawUrl = `https://raw.githubusercontent.com/${owner}/${repo}/${branch}/${filePath}?v=${Date.now()}`;
+    // Fetch fresh content via the GitHub Contents API to bypass Raw CDN caching delays completely
+    const getUrl = `https://api.github.com/repos/${owner}/${repo}/contents/${filePath}?ref=${branch}`;
     const headers: Record<string, string> = {
+      "Accept": "application/vnd.github.v3+json",
       "User-Agent": "Genres-Admin-Dashboard"
     };
     if (githubToken) {
       headers["Authorization"] = `token ${githubToken}`;
     }
 
-    const r = await fetch(rawUrl, { 
-      headers,
-      cache: "no-store" 
-    });
-
-    if (!r.ok) {
-      // If raw file doesn't exist yet but GitHub is configured, return local or default fallback
-      const localPath = path.join(process.cwd(), "genres.json");
-      if (fs.existsSync(localPath)) {
-        const fileContent = fs.readFileSync(localPath, "utf-8");
-        return res.json(JSON.parse(fileContent));
+    console.log(`[GitHub Sync] Fetching fresh genres.json via Contents API`);
+    const r = await fetch(getUrl, { headers });
+    if (r.ok) {
+      const fileData = await r.json() as any;
+      if (fileData.content) {
+        const content = Buffer.from(fileData.content, "base64").toString("utf-8");
+        const parsed = JSON.parse(content);
+        fs.writeFileSync(localPath, JSON.stringify(parsed, null, 2), "utf-8");
+        cachedGenres = parsed;
+        genresLastFetched = now;
+        return res.json(parsed);
       }
-      return res.json(DEFAULT_GENRES);
+    } else {
+      console.warn(`[GitHub Sync] Contents API for genres.json failed with status ${r.status}. Trying raw URL fallback...`);
+      const rawUrl = `https://raw.githubusercontent.com/${owner}/${repo}/${branch}/${filePath}?v=${now}`;
+      const rawHeaders: Record<string, string> = { "User-Agent": "Genres-Admin-Dashboard" };
+      if (githubToken) {
+        rawHeaders["Authorization"] = `token ${githubToken}`;
+      }
+      const rRaw = await fetch(rawUrl, { headers: rawHeaders, cache: "no-store" });
+      if (rRaw.ok) {
+        const content = await rRaw.text();
+        const parsed = JSON.parse(content);
+        fs.writeFileSync(localPath, JSON.stringify(parsed, null, 2), "utf-8");
+        cachedGenres = parsed;
+        genresLastFetched = now;
+        return res.json(parsed);
+      }
     }
-
-    const json = await r.json();
-    return res.json(json);
   } catch (err: any) {
-    // Ultimate fallback if fetch fails
-    try {
-      const localPath = path.join(process.cwd(), "genres.json");
-      if (fs.existsSync(localPath)) {
-        const fileContent = fs.readFileSync(localPath, "utf-8");
-        return res.json(JSON.parse(fileContent));
-      }
-    } catch (_) {}
-    return res.status(500).json({ error: "Failed to load genres", details: String(err) });
+    console.error("Error fetching genres.json from GitHub:", err);
   }
+
+  // Ultimate fallback if fetch fails
+  try {
+    if (fs.existsSync(localPath)) {
+      const fileContent = fs.readFileSync(localPath, "utf-8");
+      const parsed = JSON.parse(fileContent);
+      cachedGenres = parsed;
+      genresLastFetched = now;
+      return res.json(parsed);
+    }
+  } catch (_) {}
+
+  cachedGenres = DEFAULT_GENRES;
+  genresLastFetched = now;
+  return res.json(DEFAULT_GENRES);
 });
 
 // --- Dynamic Hero Banner Endpoints ---
+
+let cachedHeroConfig: any | null = null;
+let heroConfigLastFetched = 0;
 
 // Get Hero Config (Public, cache-busted, used by developer client app)
 app.get("/api/get-hero-config", async (req, res) => {
@@ -234,6 +273,15 @@ app.get("/api/get-hero-config", async (req, res) => {
   res.setHeader("Pragma", "no-cache");
   res.setHeader("Expires", "0");
 
+  const CACHE_TTL = 30000; // 30 seconds
+  const now = Date.now();
+
+  if (cachedHeroConfig && (now - heroConfigLastFetched < CACHE_TTL)) {
+    return res.json(cachedHeroConfig);
+  }
+
+  const localPath = path.join(process.cwd(), filePath);
+
   const missing = [];
   if (!owner) missing.push("GITHUB_OWNER");
   if (!repo) missing.push("GITHUB_REPO");
@@ -241,11 +289,15 @@ app.get("/api/get-hero-config", async (req, res) => {
   // Local fallback if GitHub credentials are not configured
   if (missing.length > 0) {
     try {
-      const localPath = path.join(process.cwd(), filePath);
       if (fs.existsSync(localPath)) {
         const fileContent = fs.readFileSync(localPath, "utf-8");
-        return res.json(JSON.parse(fileContent));
+        const parsed = JSON.parse(fileContent);
+        cachedHeroConfig = parsed;
+        heroConfigLastFetched = now;
+        return res.json(parsed);
       } else {
+        cachedHeroConfig = DEFAULT_HERO_CONFIG;
+        heroConfigLastFetched = now;
         return res.json(DEFAULT_HERO_CONFIG);
       }
     } catch (localErr: any) {
@@ -254,37 +306,62 @@ app.get("/api/get-hero-config", async (req, res) => {
   }
 
   try {
-    const rawUrl = `https://raw.githubusercontent.com/${owner}/${repo}/${branch}/${filePath}?v=${Date.now()}`;
+    // Fetch fresh content via the GitHub Contents API to bypass Raw CDN caching delays completely
+    const getUrl = `https://api.github.com/repos/${owner}/${repo}/contents/${filePath}?ref=${branch}`;
     const headers: Record<string, string> = {
+      "Accept": "application/vnd.github.v3+json",
       "User-Agent": "Hero-Config-Admin-Dashboard"
     };
     if (githubToken) {
       headers["Authorization"] = `token ${githubToken}`;
     }
 
-    const r = await fetch(rawUrl, { headers, cache: "no-store" });
-
-    if (!r.ok) {
-      const localPath = path.join(process.cwd(), filePath);
-      if (fs.existsSync(localPath)) {
-        const fileContent = fs.readFileSync(localPath, "utf-8");
-        return res.json(JSON.parse(fileContent));
+    console.log(`[GitHub Sync] Fetching fresh hero_config.json via Contents API`);
+    const r = await fetch(getUrl, { headers });
+    if (r.ok) {
+      const fileData = await r.json() as any;
+      if (fileData.content) {
+        const content = Buffer.from(fileData.content, "base64").toString("utf-8");
+        const parsed = JSON.parse(content);
+        fs.writeFileSync(localPath, JSON.stringify(parsed, null, 2), "utf-8");
+        cachedHeroConfig = parsed;
+        heroConfigLastFetched = now;
+        return res.json(parsed);
       }
-      return res.json(DEFAULT_HERO_CONFIG);
+    } else {
+      console.warn(`[GitHub Sync] Contents API for hero_config.json failed with status ${r.status}. Trying raw URL fallback...`);
+      const rawUrl = `https://raw.githubusercontent.com/${owner}/${repo}/${branch}/${filePath}?v=${now}`;
+      const rawHeaders: Record<string, string> = { "User-Agent": "Hero-Config-Admin-Dashboard" };
+      if (githubToken) {
+        rawHeaders["Authorization"] = `token ${githubToken}`;
+      }
+      const rRaw = await fetch(rawUrl, { headers: rawHeaders, cache: "no-store" });
+      if (rRaw.ok) {
+        const content = await rRaw.text();
+        const parsed = JSON.parse(content);
+        fs.writeFileSync(localPath, JSON.stringify(parsed, null, 2), "utf-8");
+        cachedHeroConfig = parsed;
+        heroConfigLastFetched = now;
+        return res.json(parsed);
+      }
     }
-
-    const json = await r.json();
-    return res.json(json);
   } catch (err: any) {
-    try {
-      const localPath = path.join(process.cwd(), filePath);
-      if (fs.existsSync(localPath)) {
-        const fileContent = fs.readFileSync(localPath, "utf-8");
-        return res.json(JSON.parse(fileContent));
-      }
-    } catch (_) {}
-    return res.status(500).json({ error: "Failed to load hero config", details: String(err) });
+    console.error("Error fetching hero config from GitHub:", err);
   }
+
+  try {
+    if (fs.existsSync(localPath)) {
+      const fileContent = fs.readFileSync(localPath, "utf-8");
+      const parsed = JSON.parse(fileContent);
+      cachedHeroConfig = parsed;
+      heroConfigLastFetched = now;
+      return res.json(parsed);
+    }
+  } catch (_) {}
+
+  cachedHeroConfig = DEFAULT_HERO_CONFIG;
+  heroConfigLastFetched = now;
+  return res.json(DEFAULT_HERO_CONFIG);
 });
 
 // Update Hero Config (Admin Auth, commits update to GitHub or saves locally)
@@ -422,6 +499,8 @@ app.post("/api/github/update-hero-config", verifyAdmin, async (req, res) => {
     try {
       const localPath = path.join(process.cwd(), filePath);
       fs.writeFileSync(localPath, JSON.stringify(fullConfig, null, 2), "utf-8");
+      cachedHeroConfig = fullConfig;
+      heroConfigLastFetched = Date.now();
 
       return res.json({
         success: true,
@@ -493,6 +572,17 @@ app.post("/api/github/update-hero-config", verifyAdmin, async (req, res) => {
     }
 
     const putResult = await putResponse.json() as any;
+
+    // Write to local cache as well to keep in-memory cache synchronized immediately
+    try {
+      const localPath = path.join(process.cwd(), filePath);
+      fs.writeFileSync(localPath, updatedJsonString, "utf-8");
+      cachedHeroConfig = fullConfig;
+      heroConfigLastFetched = Date.now();
+    } catch (errLocal) {
+      console.warn("Failed to write local hero config file:", errLocal);
+    }
+
     res.json({
       success: true,
       message: "Successfully committed hero configuration to GitHub repository!",
@@ -635,6 +725,8 @@ app.post("/api/github/sync-hero-metadata", verifyAdmin, async (req, res) => {
     try {
       const localPath = path.join(process.cwd(), filePath);
       fs.writeFileSync(localPath, JSON.stringify(activeConfig, null, 2), "utf-8");
+      cachedHeroConfig = activeConfig;
+      heroConfigLastFetched = Date.now();
       return res.json({
         success: true,
         message: "Successfully synchronized and saved local hero_config.json file (Development Mode).",
@@ -689,6 +781,16 @@ app.post("/api/github/sync-hero-metadata", verifyAdmin, async (req, res) => {
         success: false,
         error: `GitHub PUT commit failed: ${errText}`
       });
+    }
+
+    // Update local cache and file
+    try {
+      const localPath = path.join(process.cwd(), filePath);
+      fs.writeFileSync(localPath, updatedJsonString, "utf-8");
+      cachedHeroConfig = activeConfig;
+      heroConfigLastFetched = Date.now();
+    } catch (errLocal) {
+      console.warn("Failed to write local hero config in sync:", errLocal);
     }
 
     res.json({
@@ -1146,20 +1248,16 @@ app.get("/api/tmdb/details", async (req, res) => {
 
 // --- Drama Media Links Storage Helpers ---
 
-let isDramaLinksLoadedFromGithub = false;
+let cachedDramaLinks: Record<string, { stream_url: string | null; download_url: string | null; title?: string; seasons?: any; media_type?: string }> | null = null;
+let dramaLinksLastFetched = 0;
 
 const loadDramaLinks = async (): Promise<Record<string, { stream_url: string | null; download_url: string | null; title?: string; seasons?: any; media_type?: string }>> => {
   const localPath = path.join(process.cwd(), "drama_links.json");
+  const CACHE_TTL = 30000; // 30 seconds
+  const now = Date.now();
 
-  // If we have already loaded from GitHub once, the local file is our absolute single-source of truth.
-  // Reading it directly avoids CDN propagation/cache delay issues on GitHub Raw files.
-  if (isDramaLinksLoadedFromGithub && fs.existsSync(localPath)) {
-    try {
-      const content = fs.readFileSync(localPath, "utf-8");
-      return JSON.parse(content);
-    } catch (err) {
-      console.error("Error reading cached local drama_links.json:", err);
-    }
+  if (cachedDramaLinks && (now - dramaLinksLastFetched < CACHE_TTL)) {
+    return cachedDramaLinks;
   }
 
   const owner = process.env.GITHUB_OWNER;
@@ -1180,7 +1278,7 @@ const loadDramaLinks = async (): Promise<Record<string, { stream_url: string | n
         headers["Authorization"] = `token ${githubToken}`;
       }
       
-      console.log(`[GitHub Sync] Initial fetch for drama_links.json via API`);
+      console.log(`[GitHub Sync] Fetching drama_links.json via Contents API`);
       const r = await fetch(getUrl, { headers });
       if (r.ok) {
         const fileData = await r.json() as any;
@@ -1188,12 +1286,13 @@ const loadDramaLinks = async (): Promise<Record<string, { stream_url: string | n
           const content = Buffer.from(fileData.content, "base64").toString("utf-8");
           const parsed = JSON.parse(content);
           fs.writeFileSync(localPath, JSON.stringify(parsed, null, 2), "utf-8");
-          isDramaLinksLoadedFromGithub = true;
+          cachedDramaLinks = parsed;
+          dramaLinksLastFetched = now;
           return parsed;
         }
       } else {
         console.warn(`[GitHub Sync] Contents API failed with status ${r.status}. Trying Raw fallback...`);
-        const rawUrl = `https://raw.githubusercontent.com/${owner}/${repo}/${branch}/${filePath}?v=${Date.now()}`;
+        const rawUrl = `https://raw.githubusercontent.com/${owner}/${repo}/${branch}/${filePath}?v=${now}`;
         const rawHeaders: Record<string, string> = { "User-Agent": "Drama-Links-Admin" };
         if (githubToken) {
           rawHeaders["Authorization"] = `token ${githubToken}`;
@@ -1203,7 +1302,8 @@ const loadDramaLinks = async (): Promise<Record<string, { stream_url: string | n
           const content = await rRaw.text();
           const parsed = JSON.parse(content);
           fs.writeFileSync(localPath, JSON.stringify(parsed, null, 2), "utf-8");
-          isDramaLinksLoadedFromGithub = true;
+          cachedDramaLinks = parsed;
+          dramaLinksLastFetched = now;
           return parsed;
         }
       }
@@ -1215,8 +1315,10 @@ const loadDramaLinks = async (): Promise<Record<string, { stream_url: string | n
   try {
     if (fs.existsSync(localPath)) {
       const content = fs.readFileSync(localPath, "utf-8");
-      isDramaLinksLoadedFromGithub = true;
-      return JSON.parse(content);
+      const parsed = JSON.parse(content);
+      cachedDramaLinks = parsed;
+      dramaLinksLastFetched = now;
+      return parsed;
     }
   } catch (err) {
     console.error("Error reading drama_links.json fallback:", err);
@@ -1230,7 +1332,8 @@ const saveDramaLinks = async (links: Record<string, { stream_url: string | null;
   
   try {
     fs.writeFileSync(localPath, jsonContent, "utf-8");
-    isDramaLinksLoadedFromGithub = true; // Keep local source of truth flagged as loaded/valid
+    cachedDramaLinks = links;
+    dramaLinksLastFetched = Date.now();
   } catch (err) {
     console.error("Error writing drama_links.json locally:", err);
   }
@@ -1331,28 +1434,64 @@ const DEFAULT_HOME_LAYOUT = [
   }
 ];
 
+let cachedHomeLayout: any[] | null = null;
+let homeLayoutLastFetched = 0;
+
 const loadHomeLayout = async (): Promise<any[]> => {
+  const localPath = path.join(process.cwd(), "home_layout.json");
+  const CACHE_TTL = 30000; // 30 seconds
+  const now = Date.now();
+
+  if (cachedHomeLayout && (now - homeLayoutLastFetched < CACHE_TTL)) {
+    return cachedHomeLayout;
+  }
+
   const owner = process.env.GITHUB_OWNER;
   const repo = process.env.GITHUB_REPO;
   const filePath = process.env.GITHUB_HOME_LAYOUT_FILE_PATH || "home_layout.json";
   const branch = process.env.GITHUB_BRANCH || "main";
   const githubToken = process.env.GITHUB_TOKEN;
 
-  const localPath = path.join(process.cwd(), "home_layout.json");
-
   if (owner && repo) {
     try {
-      const rawUrl = `https://raw.githubusercontent.com/${owner}/${repo}/${branch}/${filePath}?v=${Date.now()}`;
-      const headers: Record<string, string> = { "User-Agent": "Home-Layout-Admin" };
+      // Fetch fresh content via the GitHub Contents API to bypass Raw CDN caching delays completely
+      const getUrl = `https://api.github.com/repos/${owner}/${repo}/contents/${filePath}?ref=${branch}`;
+      const headers: Record<string, string> = {
+        "Accept": "application/vnd.github.v3+json",
+        "User-Agent": "Home-Layout-Admin"
+      };
       if (githubToken) {
         headers["Authorization"] = `token ${githubToken}`;
       }
-      const r = await fetch(rawUrl, { headers, cache: "no-store" });
+
+      console.log(`[GitHub Sync] Fetching fresh home_layout.json via Contents API`);
+      const r = await fetch(getUrl, { headers });
       if (r.ok) {
-        const content = await r.text();
-        const parsed = JSON.parse(content);
-        fs.writeFileSync(localPath, JSON.stringify(parsed, null, 2), "utf-8");
-        return parsed;
+        const fileData = await r.json() as any;
+        if (fileData.content) {
+          const content = Buffer.from(fileData.content, "base64").toString("utf-8");
+          const parsed = JSON.parse(content);
+          fs.writeFileSync(localPath, JSON.stringify(parsed, null, 2), "utf-8");
+          cachedHomeLayout = parsed;
+          homeLayoutLastFetched = now;
+          return parsed;
+        }
+      } else {
+        console.warn(`[GitHub Sync] Contents API for home_layout.json failed with status ${r.status}. Trying raw URL fallback...`);
+        const rawUrl = `https://raw.githubusercontent.com/${owner}/${repo}/${branch}/${filePath}?v=${now}`;
+        const rawHeaders: Record<string, string> = { "User-Agent": "Home-Layout-Admin" };
+        if (githubToken) {
+          rawHeaders["Authorization"] = `token ${githubToken}`;
+        }
+        const rRaw = await fetch(rawUrl, { headers: rawHeaders, cache: "no-store" });
+        if (rRaw.ok) {
+          const content = await rRaw.text();
+          const parsed = JSON.parse(content);
+          fs.writeFileSync(localPath, JSON.stringify(parsed, null, 2), "utf-8");
+          cachedHomeLayout = parsed;
+          homeLayoutLastFetched = now;
+          return parsed;
+        }
       }
     } catch (err) {
       console.error("Error fetching home_layout.json from GitHub:", err);
@@ -1362,11 +1501,17 @@ const loadHomeLayout = async (): Promise<any[]> => {
   try {
     if (fs.existsSync(localPath)) {
       const content = fs.readFileSync(localPath, "utf-8");
-      return JSON.parse(content);
+      const parsed = JSON.parse(content);
+      cachedHomeLayout = parsed;
+      homeLayoutLastFetched = now;
+      return parsed;
     }
   } catch (err) {
-    console.error("Error reading home_layout.json, using default:", err);
+    console.error("Error reading home_layout.json fallback:", err);
   }
+
+  cachedHomeLayout = DEFAULT_HOME_LAYOUT;
+  homeLayoutLastFetched = now;
   return DEFAULT_HOME_LAYOUT;
 };
 
@@ -1376,6 +1521,8 @@ const saveHomeLayout = async (layout: any[]): Promise<boolean> => {
 
   try {
     fs.writeFileSync(localPath, jsonContent, "utf-8");
+    cachedHomeLayout = layout;
+    homeLayoutLastFetched = Date.now();
   } catch (err) {
     console.error("Error writing home_layout.json locally:", err);
   }
