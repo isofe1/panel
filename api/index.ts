@@ -1140,7 +1140,7 @@ app.get("/api/tmdb/details", async (req, res) => {
 
 // --- Drama Media Links Storage Helpers ---
 
-const loadDramaLinks = (): Record<string, { stream_url: string | null; download_url: string | null; title?: string }> => {
+const loadDramaLinks = (): Record<string, { stream_url: string | null; download_url: string | null; title?: string; seasons?: any }> => {
   try {
     const localPath = path.join(process.cwd(), "drama_links.json");
     if (fs.existsSync(localPath)) {
@@ -1153,7 +1153,7 @@ const loadDramaLinks = (): Record<string, { stream_url: string | null; download_
   return {};
 };
 
-const saveDramaLinks = (links: Record<string, { stream_url: string | null; download_url: string | null; title?: string }>) => {
+const saveDramaLinks = (links: Record<string, { stream_url: string | null; download_url: string | null; title?: string; seasons?: any }>) => {
   try {
     const localPath = path.join(process.cwd(), "drama_links.json");
     fs.writeFileSync(localPath, JSON.stringify(links, null, 2), "utf-8");
@@ -1489,42 +1489,83 @@ app.get("/api/drama/details", async (req, res) => {
   const matchedLink = links[id];
   finalDetails.stream_url = matchedLink?.stream_url || null;
   finalDetails.download_url = matchedLink?.download_url || null;
+  
+  // If we have custom season/episode records, include them in the details payload so the client app can load them
+  if (matchedLink && (matchedLink as any).seasons) {
+    finalDetails.custom_seasons = (matchedLink as any).seasons;
+  }
 
   return res.json({ success: true, data: finalDetails, source: "proxy" });
 });
 
 // --- Direct Streaming Link Specific Endpoints (Option A & B Support) ---
 
-// Option A: Get stream links for a single title (Supports both query param "?id={tmdb_id}" and path param "/{tmdb_id}")
+// Option A: Get stream links for a single title (Supports query params "?id={tmdb_id}&season={season_num}&episode={ep_num}")
 app.get("/api/get-stream-links", (req, res) => {
   const id = req.query.id as string;
+  const season = req.query.season ? String(req.query.season) : undefined;
+  const episode = req.query.episode ? String(req.query.episode) : undefined;
+
   if (!id || !id.trim()) {
     return res.status(400).json({ success: false, error: "Missing required query parameter: id" });
   }
+
   const links = loadDramaLinks();
   const matched = links[id];
+
+  let stream_url = matched?.stream_url || null;
+  let download_url = matched?.download_url || null;
+
+  // Resolve episode-specific links if they are available
+  if (season && episode && matched && (matched as any).seasons?.[season]?.[episode]) {
+    const epData = (matched as any).seasons[season][episode];
+    if (epData.stream_url) stream_url = epData.stream_url;
+    if (epData.download_url) download_url = epData.download_url;
+  }
+
   return res.json({
     success: true,
     id: id,
-    stream_url: matched?.stream_url || null,
-    download_url: matched?.download_url || null,
-    title: matched?.title || null
+    season: season || null,
+    episode: episode || null,
+    stream_url,
+    download_url,
+    title: matched?.title || null,
+    has_custom_episodes: !!(matched && (matched as any).seasons)
   });
 });
 
 app.get("/api/get-stream-links/:id", (req, res) => {
   const id = req.params.id;
+  const season = req.query.season ? String(req.query.season) : undefined;
+  const episode = req.query.episode ? String(req.query.episode) : undefined;
+
   if (!id || !id.trim()) {
     return res.status(400).json({ success: false, error: "Missing required path parameter: id" });
   }
+
   const links = loadDramaLinks();
   const matched = links[id];
+
+  let stream_url = matched?.stream_url || null;
+  let download_url = matched?.download_url || null;
+
+  // Resolve episode-specific links if they are available
+  if (season && episode && matched && (matched as any).seasons?.[season]?.[episode]) {
+    const epData = (matched as any).seasons[season][episode];
+    if (epData.stream_url) stream_url = epData.stream_url;
+    if (epData.download_url) download_url = epData.download_url;
+  }
+
   return res.json({
     success: true,
     id: id,
-    stream_url: matched?.stream_url || null,
-    download_url: matched?.download_url || null,
-    title: matched?.title || null
+    season: season || null,
+    episode: episode || null,
+    stream_url,
+    download_url,
+    title: matched?.title || null,
+    has_custom_episodes: !!(matched && (matched as any).seasons)
   });
 });
 
@@ -1834,7 +1875,7 @@ app.get("/api/admin/drama-links", verifyAdmin, (req, res) => {
 
 // Update or add a drama media link (VerifyAdmin, commits to GitHub if enabled, or saves locally)
 app.post("/api/admin/drama-links", verifyAdmin, async (req, res) => {
-  const { id, stream_url, download_url, title } = req.body;
+  const { id, stream_url, download_url, title, seasons } = req.body;
 
   if (!id) {
     return res.status(400).json({ success: false, error: "Missing required parameter: id" });
@@ -1842,14 +1883,15 @@ app.post("/api/admin/drama-links", verifyAdmin, async (req, res) => {
 
   const links = loadDramaLinks();
   
-  if (stream_url === null && download_url === null) {
-    // Delete item if both URLs are cleared
+  if (stream_url === null && download_url === null && !seasons) {
+    // Delete item if everything is cleared
     delete links[id];
   } else {
     links[id] = {
       stream_url: stream_url ? String(stream_url).trim() : null,
       download_url: download_url ? String(download_url).trim() : null,
-      title: title ? String(title).trim() : links[id]?.title || `Drama (ID: ${id})`
+      title: title ? String(title).trim() : links[id]?.title || `Drama (ID: ${id})`,
+      seasons: seasons || (links[id] as any)?.seasons || undefined
     };
   }
 
