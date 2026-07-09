@@ -1140,9 +1140,35 @@ app.get("/api/tmdb/details", async (req, res) => {
 
 // --- Drama Media Links Storage Helpers ---
 
-const loadDramaLinks = (): Record<string, { stream_url: string | null; download_url: string | null; title?: string; seasons?: any }> => {
+const loadDramaLinks = async (): Promise<Record<string, { stream_url: string | null; download_url: string | null; title?: string; seasons?: any }>> => {
+  const owner = process.env.GITHUB_OWNER;
+  const repo = process.env.GITHUB_REPO;
+  const filePath = process.env.GITHUB_DRAMA_LINKS_FILE_PATH || "drama_links.json";
+  const branch = process.env.GITHUB_BRANCH || "main";
+  const githubToken = process.env.GITHUB_TOKEN;
+
+  const localPath = path.join(process.cwd(), "drama_links.json");
+
+  if (owner && repo) {
+    try {
+      const rawUrl = `https://raw.githubusercontent.com/${owner}/${repo}/${branch}/${filePath}`;
+      const headers: Record<string, string> = { "User-Agent": "Drama-Links-Admin" };
+      if (githubToken) {
+        headers["Authorization"] = `token ${githubToken}`;
+      }
+      const r = await fetch(rawUrl, { headers, cache: "no-store" });
+      if (r.ok) {
+        const content = await r.text();
+        const parsed = JSON.parse(content);
+        fs.writeFileSync(localPath, JSON.stringify(parsed, null, 2), "utf-8");
+        return parsed;
+      }
+    } catch (err) {
+      console.error("Error fetching drama_links.json from GitHub:", err);
+    }
+  }
+
   try {
-    const localPath = path.join(process.cwd(), "drama_links.json");
     if (fs.existsSync(localPath)) {
       const content = fs.readFileSync(localPath, "utf-8");
       return JSON.parse(content);
@@ -1153,13 +1179,70 @@ const loadDramaLinks = (): Record<string, { stream_url: string | null; download_
   return {};
 };
 
-const saveDramaLinks = (links: Record<string, { stream_url: string | null; download_url: string | null; title?: string; seasons?: any }>) => {
+const saveDramaLinks = async (links: Record<string, { stream_url: string | null; download_url: string | null; title?: string; seasons?: any }>): Promise<boolean> => {
+  const localPath = path.join(process.cwd(), "drama_links.json");
+  const jsonContent = JSON.stringify(links, null, 2);
+  
   try {
-    const localPath = path.join(process.cwd(), "drama_links.json");
-    fs.writeFileSync(localPath, JSON.stringify(links, null, 2), "utf-8");
+    fs.writeFileSync(localPath, jsonContent, "utf-8");
   } catch (err) {
-    console.error("Error writing drama_links.json:", err);
+    console.error("Error writing drama_links.json locally:", err);
   }
+
+  const owner = process.env.GITHUB_OWNER;
+  const repo = process.env.GITHUB_REPO;
+  const filePath = process.env.GITHUB_DRAMA_LINKS_FILE_PATH || "drama_links.json";
+  const branch = process.env.GITHUB_BRANCH || "main";
+  const githubToken = process.env.GITHUB_TOKEN;
+
+  if (owner && repo && githubToken) {
+    try {
+      const getUrl = `https://api.github.com/repos/${owner}/${repo}/contents/${filePath}?ref=${branch}`;
+      const headers = {
+        "Accept": "application/vnd.github.v3+json",
+        "Authorization": `token ${githubToken}`,
+        "User-Agent": "Drama-Links-Admin",
+        "Content-Type": "application/json"
+      };
+
+      const getResponse = await fetch(getUrl, { headers: { ...headers, "Content-Type": undefined } as any });
+      let currentSha = "";
+      if (getResponse.ok) {
+        const fileData = await getResponse.json() as any;
+        currentSha = fileData.sha;
+      }
+
+      const base64Content = Buffer.from(jsonContent, "utf-8").toString("base64");
+
+      const putUrl = `https://api.github.com/repos/${owner}/${repo}/contents/${filePath}`;
+      const payload: any = {
+        message: `Admin UI: Update drama links configuration`,
+        content: base64Content,
+        branch: branch
+      };
+      if (currentSha) {
+        payload.sha = currentSha;
+      }
+
+      const putResponse = await fetch(putUrl, {
+        method: "PUT",
+        headers,
+        body: JSON.stringify(payload)
+      });
+
+      if (!putResponse.ok) {
+        const errText = await putResponse.text();
+        console.error(`GitHub PUT failed for drama_links.json: ${errText}`);
+        return false;
+      }
+      return true;
+    } catch (err) {
+      console.error("Error committing drama_links.json to GitHub:", err);
+      return false;
+    }
+  }
+
+  return true;
 };
 
 // --- Home Screen Layout Dynamic Configuration Storage Helpers ---
@@ -1196,9 +1279,35 @@ const DEFAULT_HOME_LAYOUT = [
   }
 ];
 
-const loadHomeLayout = (): any[] => {
+const loadHomeLayout = async (): Promise<any[]> => {
+  const owner = process.env.GITHUB_OWNER;
+  const repo = process.env.GITHUB_REPO;
+  const filePath = process.env.GITHUB_HOME_LAYOUT_FILE_PATH || "home_layout.json";
+  const branch = process.env.GITHUB_BRANCH || "main";
+  const githubToken = process.env.GITHUB_TOKEN;
+
+  const localPath = path.join(process.cwd(), "home_layout.json");
+
+  if (owner && repo) {
+    try {
+      const rawUrl = `https://raw.githubusercontent.com/${owner}/${repo}/${branch}/${filePath}`;
+      const headers: Record<string, string> = { "User-Agent": "Home-Layout-Admin" };
+      if (githubToken) {
+        headers["Authorization"] = `token ${githubToken}`;
+      }
+      const r = await fetch(rawUrl, { headers, cache: "no-store" });
+      if (r.ok) {
+        const content = await r.text();
+        const parsed = JSON.parse(content);
+        fs.writeFileSync(localPath, JSON.stringify(parsed, null, 2), "utf-8");
+        return parsed;
+      }
+    } catch (err) {
+      console.error("Error fetching home_layout.json from GitHub:", err);
+    }
+  }
+
   try {
-    const localPath = path.join(process.cwd(), "home_layout.json");
     if (fs.existsSync(localPath)) {
       const content = fs.readFileSync(localPath, "utf-8");
       return JSON.parse(content);
@@ -1209,15 +1318,70 @@ const loadHomeLayout = (): any[] => {
   return DEFAULT_HOME_LAYOUT;
 };
 
-const saveHomeLayout = (layout: any[]): boolean => {
+const saveHomeLayout = async (layout: any[]): Promise<boolean> => {
+  const localPath = path.join(process.cwd(), "home_layout.json");
+  const jsonContent = JSON.stringify(layout, null, 2);
+
   try {
-    const localPath = path.join(process.cwd(), "home_layout.json");
-    fs.writeFileSync(localPath, JSON.stringify(layout, null, 2), "utf-8");
-    return true;
+    fs.writeFileSync(localPath, jsonContent, "utf-8");
   } catch (err) {
-    console.error("Error writing home_layout.json:", err);
-    return false;
+    console.error("Error writing home_layout.json locally:", err);
   }
+
+  const owner = process.env.GITHUB_OWNER;
+  const repo = process.env.GITHUB_REPO;
+  const filePath = process.env.GITHUB_HOME_LAYOUT_FILE_PATH || "home_layout.json";
+  const branch = process.env.GITHUB_BRANCH || "main";
+  const githubToken = process.env.GITHUB_TOKEN;
+
+  if (owner && repo && githubToken) {
+    try {
+      const getUrl = `https://api.github.com/repos/${owner}/${repo}/contents/${filePath}?ref=${branch}`;
+      const headers = {
+        "Accept": "application/vnd.github.v3+json",
+        "Authorization": `token ${githubToken}`,
+        "User-Agent": "Home-Layout-Admin",
+        "Content-Type": "application/json"
+      };
+
+      const getResponse = await fetch(getUrl, { headers: { ...headers, "Content-Type": undefined } as any });
+      let currentSha = "";
+      if (getResponse.ok) {
+        const fileData = await getResponse.json() as any;
+        currentSha = fileData.sha;
+      }
+
+      const base64Content = Buffer.from(jsonContent, "utf-8").toString("base64");
+
+      const putUrl = `https://api.github.com/repos/${owner}/${repo}/contents/${filePath}`;
+      const payload: any = {
+        message: `Admin UI: Update home screen layout configuration`,
+        content: base64Content,
+        branch: branch
+      };
+      if (currentSha) {
+        payload.sha = currentSha;
+      }
+
+      const putResponse = await fetch(putUrl, {
+        method: "PUT",
+        headers,
+        body: JSON.stringify(payload)
+      });
+
+      if (!putResponse.ok) {
+        const errText = await putResponse.text();
+        console.error(`GitHub PUT failed for home_layout.json: ${errText}`);
+        return false;
+      }
+      return true;
+    } catch (err) {
+      console.error("Error committing home_layout.json to GitHub:", err);
+      return false;
+    }
+  }
+
+  return true;
 };
 
 // --- Mobile Android / Public Proxy Endpoints ---
@@ -1485,7 +1649,7 @@ app.get("/api/drama/details", async (req, res) => {
   }
 
   // Inject custom stream and download links from local drama_links database!
-  const links = loadDramaLinks();
+  const links = await loadDramaLinks();
   const matchedLink = links[id];
   finalDetails.stream_url = matchedLink?.stream_url || null;
   finalDetails.download_url = matchedLink?.download_url || null;
@@ -1501,7 +1665,7 @@ app.get("/api/drama/details", async (req, res) => {
 // --- Direct Streaming Link Specific Endpoints (Option A & B Support) ---
 
 // Option A: Get stream links for a single title (Supports query params "?id={tmdb_id}&season={season_num}&episode={ep_num}")
-app.get("/api/get-stream-links", (req, res) => {
+app.get("/api/get-stream-links", async (req, res) => {
   const id = req.query.id as string;
   const season = req.query.season ? String(req.query.season) : undefined;
   const episode = req.query.episode ? String(req.query.episode) : undefined;
@@ -1510,7 +1674,7 @@ app.get("/api/get-stream-links", (req, res) => {
     return res.status(400).json({ success: false, error: "Missing required query parameter: id" });
   }
 
-  const links = loadDramaLinks();
+  const links = await loadDramaLinks();
   const matched = links[id];
 
   let stream_url = matched?.stream_url || null;
@@ -1535,7 +1699,7 @@ app.get("/api/get-stream-links", (req, res) => {
   });
 });
 
-app.get("/api/get-stream-links/:id", (req, res) => {
+app.get("/api/get-stream-links/:id", async (req, res) => {
   const id = req.params.id;
   const season = req.query.season ? String(req.query.season) : undefined;
   const episode = req.query.episode ? String(req.query.episode) : undefined;
@@ -1544,7 +1708,7 @@ app.get("/api/get-stream-links/:id", (req, res) => {
     return res.status(400).json({ success: false, error: "Missing required path parameter: id" });
   }
 
-  const links = loadDramaLinks();
+  const links = await loadDramaLinks();
   const matched = links[id];
 
   let stream_url = matched?.stream_url || null;
@@ -1570,8 +1734,8 @@ app.get("/api/get-stream-links/:id", (req, res) => {
 });
 
 // Option B: Get all active custom overrides/links in a single unified JSON for local caching
-app.get("/api/get-all-stream-links", (req, res) => {
-  const links = loadDramaLinks();
+app.get("/api/get-all-stream-links", async (req, res) => {
+  const links = await loadDramaLinks();
   return res.json({
     success: true,
     links
@@ -1581,8 +1745,8 @@ app.get("/api/get-all-stream-links", (req, res) => {
 // --- Dynamic Home Screen Layout Endpoints ---
 
 // Public endpoint for the Android client app to fetch the layout configuration
-app.get("/api/get-home-layout", (req, res) => {
-  const layout = loadHomeLayout();
+app.get("/api/get-home-layout", async (req, res) => {
+  const layout = await loadHomeLayout();
   return res.json({
     success: true,
     layout
@@ -1590,8 +1754,8 @@ app.get("/api/get-home-layout", (req, res) => {
 });
 
 // Admin endpoint to read the current layout configuration
-app.get("/api/admin/home-layout", verifyAdmin, (req, res) => {
-  const layout = loadHomeLayout();
+app.get("/api/admin/home-layout", verifyAdmin, async (req, res) => {
+  const layout = await loadHomeLayout();
   return res.json({
     success: true,
     layout
@@ -1599,13 +1763,13 @@ app.get("/api/admin/home-layout", verifyAdmin, (req, res) => {
 });
 
 // Admin endpoint to write/update the layout configuration
-app.post("/api/admin/home-layout", verifyAdmin, (req, res) => {
+app.post("/api/admin/home-layout", verifyAdmin, async (req, res) => {
   const { layout } = req.body;
   if (!layout || !Array.isArray(layout)) {
     return res.status(400).json({ success: false, error: "Invalid layout payload. Must be a JSON array of sections." });
   }
 
-  const success = saveHomeLayout(layout);
+  const success = await saveHomeLayout(layout);
   if (success) {
     return res.json({
       success: true,
@@ -1868,8 +2032,8 @@ app.get("/api/person/details", async (req, res) => {
 // --- Administration / Custom Links Config Endpoints ---
 
 // Get all drama media links (VerifyAdmin)
-app.get("/api/admin/drama-links", verifyAdmin, (req, res) => {
-  const links = loadDramaLinks();
+app.get("/api/admin/drama-links", verifyAdmin, async (req, res) => {
+  const links = await loadDramaLinks();
   res.json({ success: true, links });
 });
 
@@ -1881,7 +2045,7 @@ app.post("/api/admin/drama-links", verifyAdmin, async (req, res) => {
     return res.status(400).json({ success: false, error: "Missing required parameter: id" });
   }
 
-  const links = loadDramaLinks();
+  const links = await loadDramaLinks();
   
   if (stream_url === null && download_url === null && !seasons) {
     // Delete item if everything is cleared
@@ -1896,7 +2060,7 @@ app.post("/api/admin/drama-links", verifyAdmin, async (req, res) => {
   }
 
   // Save locally first
-  saveDramaLinks(links);
+  await saveDramaLinks(links);
 
   // Attempt to save to GitHub if configured to keep repo updated!
   const owner = process.env.GITHUB_OWNER;
