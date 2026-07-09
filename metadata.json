@@ -1,6 +1,8 @@
 {
-  "name": "Genres Admin Dashboard",
+  "name": "Remix: Genres Admin Dashboard",
   "description": "Admin dashboard to manage a Git-based Static API for Android Genres page via GitHub API, with a built-in Android simulator and Kotlin Native code integration.",
   "requestFramePermissions": [],
-  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
 }

@@ -1,0 +1,79 @@
+{
+  "hero_config": {
+    "mode": "HYBRID",
+    "max_items": 6,
+    "auto_source": "popular",
+    "pinned_items": [
+      {
+        "drama_id": "111837",
+        "position": 1,
+        "drama": {
+          "slug": "tv-111837",
+          "title": "Queen of Tears",
+          "poster_url": "https://images.unsplash.com/photo-1518156677180-95a2893f3e9f?q=80&w=600",
+          "backdrop_url": "https://images.unsplash.com/photo-1492691527719-9d1e07e534b4?q=80&w=1200",
+          "rating": 8.5,
+          "year": 2024,
+          "type": "tv",
+          "country": "KR"
+        }
+      },
+      {
+        "drama_id": "96648",
+        "position": 2,
+        "drama": {
+          "slug": "tv-96648",
+          "title": "Squid Game",
+          "poster_url": "https://images.unsplash.com/photo-1511512578047-dfb367046420?q=80&w=600",
+          "backdrop_url": "https://images.unsplash.com/photo-1518709268805-4e9042af9f23?q=80&w=1200",
+          "rating": 8.7,
+          "year": 2021,
+          "type": "tv",
+          "country": "KR"
+        }
+      },
+      {
+        "drama_id": "212151",
+        "position": 3,
+        "drama": {
+          "slug": "tv-212151",
+          "title": "My Demon",
+          "poster_url": "https://images.unsplash.com/photo-1516589178581-6cd7833ae3b2?q=80&w=600",
+          "backdrop_url": "https://images.unsplash.com/photo-1534447677768-be436bb09401?q=80&w=1200",
+          "rating": 8.6,
+          "year": 2023,
+          "type": "tv",
+          "country": "KR"
+        }
+      },
+      {
+        "drama_id": "117376",
+        "position": 4,
+        "drama": {
+          "slug": "tv-117376",
+          "title": "Vincenzo",
+          "poster_url": "https://images.unsplash.com/photo-1485846234645-a62644f84728?q=80&w=600",
+          "backdrop_url": "https://images.unsplash.com/photo-1507679799987-c73779587ccf?q=80&w=1200",
+          "rating": 8.5,
+          "year": 2021,
+          "type": "tv",
+          "country": "KR"
+        }
+      },
+      {
+        "drama_id": "94605",
+        "position": 5,
+        "drama": {
+          "slug": "tv-94605",
+          "title": "Sweet Home",
+          "poster_url": "https://images.unsplash.com/photo-1509248961158-e54f6934749c?q=80&w=600",
+          "backdrop_url": "https://images.unsplash.com/photo-1536440136628-849c177e76a1?q=80&w=1200",
+          "rating": 8.4,
+          "year": 2020,
+          "type": "tv",
+          "country": "KR"
+        }
+      }
+    ]
+  }
+}
