@@ -21,6 +21,10 @@ import {
   User,
   ExternalLink,
   ChevronRight,
+  ChevronUp,
+  ChevronDown,
+  ArrowUp,
+  ArrowDown,
   Eye,
   Settings2,
   Home,
@@ -48,7 +52,11 @@ import {
   Sliders,
   Pin,
   Tv,
-  GripVertical
+  GripVertical,
+  Video,
+  Link,
+  PlusCircle,
+  Play
 } from "lucide-react";
 import { Genre, GitHubConfig, ChatMessage, LocalSnapshot, SystemStats, HeroConfig, PinnedItem } from "./types";
 import { kotlinTemplates } from "./codeTemplates";
@@ -62,6 +70,38 @@ const BACKDROP_PRESETS = [
   { name: "K-Drama / Autumn", url: "https://images.unsplash.com/photo-1492691527719-9d1e07e534b4?auto=format&fit=crop&q=80&w=1200" },
   { name: "Fantasy / Adventure", url: "https://images.unsplash.com/photo-1469474968028-56623f02e42e?auto=format&fit=crop&q=80&w=1200" },
   { name: "Horror / Dark Woods", url: "https://images.unsplash.com/photo-1505635552518-3448ff116af3?auto=format&fit=crop&q=80&w=1200" }
+];
+
+const DEFAULT_HOME_LAYOUT = [
+  {
+    "section_id": "hero_banner",
+    "layout_type": "HERO",
+    "title": "Featured Spotlight",
+    "visible": true
+  },
+  {
+    "section_id": "top_10_global",
+    "layout_type": "TOP_10",
+    "title": "Top 10 Hits",
+    "visible": true
+  },
+  {
+    "section_id": "kr_jp_mixed",
+    "layout_type": "DRAMA_RAIL",
+    "title": "Korean & Japanese Hits",
+    "visible": true,
+    "data_source": {
+      "media_type": "all",
+      "countries": ["KR", "JP"],
+      "sort_by": "popularity"
+    }
+  },
+  {
+    "section_id": "trending_actors",
+    "layout_type": "ACTORS",
+    "title": "Trending Stars",
+    "visible": true
+  }
 ];
 
 export default function App() {
@@ -119,6 +159,22 @@ export default function App() {
       { drama_id: "drama_456_id", position: 3 }
     ]
   });
+
+  // Slide edit modal state
+  const [editingSlidePos, setEditingSlidePos] = useState<number | null>(null);
+  const [slideTitleInput, setSlideTitleInput] = useState<string>("");
+  const [slideIdInput, setSlideIdInput] = useState<string>("");
+  const [slideYearInput, setSlideYearInput] = useState<number>(2024);
+  const [slideRatingInput, setSlideRatingInput] = useState<number>(8.0);
+  const [slideTypeInput, setSlideTypeInput] = useState<"tv" | "movie">("tv");
+  const [slideBackdropInput, setSlideBackdropInput] = useState<string>("");
+  const [slideOverviewInput, setSlideOverviewInput] = useState<string>("");
+  const [slideCountryInput, setSlideCountryInput] = useState<string>("KR");
+  
+  // Slide search state
+  const [slideSearchQuery, setSlideSearchQuery] = useState<string>("");
+  const [slideSearchResults, setSlideSearchResults] = useState<any[]>([]);
+  const [slideSearchLoading, setSlideSearchLoading] = useState<boolean>(false);
   const [initialHeroConfig, setInitialHeroConfig] = useState<HeroConfig>({
     mode: "HYBRID",
     max_items: 6,
@@ -134,6 +190,35 @@ export default function App() {
   const [heroSyncing, setHeroSyncing] = useState<boolean>(false);
   const [newPinnedDramaId, setNewPinnedDramaId] = useState<string>("");
   const [newPinnedPosition, setNewPinnedPosition] = useState<number>(1);
+
+  // Media Stream Injector States
+  const [dramaLinks, setDramaLinks] = useState<Record<string, { stream_url: string | null; download_url: string | null; title?: string }>>({});
+  const [linksLoading, setLinksLoading] = useState<boolean>(false);
+  const [linksSaving, setLinksSaving] = useState<boolean>(false);
+  const [linksMessage, setLinksMessage] = useState<{ text: string; type: "success" | "error" } | null>(null);
+
+  // Form Inputs for Adding/Editing a Link
+  const [linkDramaId, setLinkDramaId] = useState<string>("");
+  const [linkTitle, setLinkTitle] = useState<string>("");
+  const [linkStreamUrl, setLinkStreamUrl] = useState<string>("");
+  const [linkDownloadUrl, setLinkDownloadUrl] = useState<string>("");
+  const [linkEditingId, setLinkEditingId] = useState<string | null>(null);
+
+  // Dynamic Home Layout States
+  const [homeLayout, setHomeLayout] = useState<any[]>([]);
+  const [layoutLoading, setLayoutLoading] = useState<boolean>(false);
+  const [layoutSaving, setLayoutSaving] = useState<boolean>(false);
+  const [layoutMessage, setLayoutMessage] = useState<{ text: string; type: "success" | "error" } | null>(null);
+
+  // Form Inputs for Home Layout Section
+  const [layoutEditingId, setLayoutEditingId] = useState<string | null>(null);
+  const [layoutSectionId, setLayoutSectionId] = useState<string>("");
+  const [layoutTitleInput, setLayoutTitleInput] = useState<string>("");
+  const [layoutTypeInput, setLayoutTypeInput] = useState<string>("DRAMA_RAIL");
+  const [layoutVisibleInput, setLayoutVisibleInput] = useState<boolean>(true);
+  const [layoutMediaTypeInput, setLayoutMediaTypeInput] = useState<string>("all");
+  const [layoutCountriesInput, setLayoutCountriesInput] = useState<string>("KR, JP");
+  const [layoutSortByInput, setLayoutSortByInput] = useState<string>("popularity");
 
   // Drag and Drop states and handlers
   const [draggedPosition, setDraggedPosition] = useState<number | null>(null);
@@ -413,11 +498,11 @@ export default function App() {
                   id: dramaId,
                   title: item.drama.title,
                   type: item.drama.type || "tv",
-                  poster_path: item.drama.poster_url,
+                  poster_path: item.drama.backdrop_url,
                   backdrop_path: item.drama.backdrop_url,
                   vote_average: item.drama.rating || 0.0,
                   release_date: item.drama.year ? `${item.drama.year}-01-01` : "",
-                  overview: item.drama.overview || ""
+                  overview: item.drama.synopsis || item.drama.overview || ""
                 };
               }
             }
@@ -434,6 +519,267 @@ export default function App() {
       addLog(`Failed to load Hero Banner config: ${err.message}`, "error");
     } finally {
       setHeroLoading(false);
+    }
+  };
+
+  // Fetch Custom Media Stream Links from backend
+  const fetchDramaLinks = async () => {
+    setLinksLoading(true);
+    try {
+      const response = await fetch("/api/admin/drama-links", {
+        headers: {
+          "x-admin-password": adminPassword
+        }
+      });
+      const data = await response.json();
+      if (data.success) {
+        setDramaLinks(data.links || {});
+      } else {
+        setLinksMessage({ text: data.error || "Failed to load media links.", type: "error" });
+      }
+    } catch (err: any) {
+      setLinksMessage({ text: err.message || "Error connecting to backend.", type: "error" });
+    } finally {
+      setLinksLoading(false);
+    }
+  };
+
+  // Save or Update custom streaming link
+  const handleSaveDramaLink = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!linkDramaId.trim()) {
+      setLinksMessage({ text: "Drama ID is required.", type: "error" });
+      return;
+    }
+    setLinksSaving(true);
+    setLinksMessage(null);
+    try {
+      const response = await fetch("/api/admin/drama-links", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "x-admin-password": adminPassword
+        },
+        body: JSON.stringify({
+          id: linkDramaId.trim(),
+          title: linkTitle.trim() || undefined,
+          stream_url: linkStreamUrl.trim() || null,
+          download_url: linkDownloadUrl.trim() || null
+        })
+      });
+      const data = await response.json();
+      if (data.success) {
+        setDramaLinks(data.links);
+        setLinksMessage({ text: data.message || "Successfully saved link configuration!", type: "success" });
+        // Reset fields
+        setLinkDramaId("");
+        setLinkTitle("");
+        setLinkStreamUrl("");
+        setLinkDownloadUrl("");
+        setLinkEditingId(null);
+      } else {
+        setLinksMessage({ text: data.error || "Failed to save link configuration.", type: "error" });
+      }
+    } catch (err: any) {
+      setLinksMessage({ text: err.message || "Error saving link configuration.", type: "error" });
+    } finally {
+      setLinksSaving(false);
+    }
+  };
+
+  // Delete a customized link
+  const handleDeleteDramaLink = async (id: string) => {
+    if (!window.confirm(`Are you sure you want to remove all custom links for Drama ID: ${id}?`)) {
+      return;
+    }
+    setLinksSaving(true);
+    try {
+      const response = await fetch("/api/admin/drama-links", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "x-admin-password": adminPassword
+        },
+        body: JSON.stringify({
+          id: id,
+          stream_url: null,
+          download_url: null
+        })
+      });
+      const data = await response.json();
+      if (data.success) {
+        setDramaLinks(data.links);
+        setLinksMessage({ text: "Custom link deleted successfully.", type: "success" });
+      } else {
+        setLinksMessage({ text: data.error || "Failed to delete link configuration.", type: "error" });
+      }
+    } catch (err: any) {
+      setLinksMessage({ text: err.message || "Error deleting link configuration.", type: "error" });
+    } finally {
+      setLinksSaving(false);
+    }
+  };
+
+  // --- Dynamic Home Screen Layout Configuration Helpers ---
+
+  // Fetch current layout from server
+  const fetchHomeLayout = async () => {
+    setLayoutLoading(true);
+    setLayoutMessage(null);
+    try {
+      const response = await fetch("/api/admin/home-layout", {
+        headers: {
+          "x-admin-password": adminPassword
+        }
+      });
+      const data = await response.json();
+      if (data.success) {
+        setHomeLayout(data.layout || []);
+      } else {
+        setLayoutMessage({ text: data.error || "Failed to load Home Layout.", type: "error" });
+      }
+    } catch (err: any) {
+      setLayoutMessage({ text: err.message || "Error loading Home Layout.", type: "error" });
+    } finally {
+      setLayoutLoading(false);
+    }
+  };
+
+  // Persist updated layout to backend
+  const saveLayoutConfig = async (layoutToSave: any[]) => {
+    setLayoutSaving(true);
+    setLayoutMessage(null);
+    try {
+      const response = await fetch("/api/admin/home-layout", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "x-admin-password": adminPassword
+        },
+        body: JSON.stringify({ layout: layoutToSave })
+      });
+      const data = await response.json();
+      if (data.success) {
+        setHomeLayout(data.layout);
+        setLayoutMessage({ text: data.message || "Home Screen layout saved successfully!", type: "success" });
+        return true;
+      } else {
+        setLayoutMessage({ text: data.error || "Failed to save Home Screen layout.", type: "error" });
+        return false;
+      }
+    } catch (err: any) {
+      setLayoutMessage({ text: err.message || "Error saving Home Screen layout.", type: "error" });
+      return false;
+    } finally {
+      setLayoutSaving(false);
+    }
+  };
+
+  // Move section position up or down
+  const handleSectionOrderChange = async (index: number, direction: "up" | "down") => {
+    if (direction === "up" && index === 0) return;
+    if (direction === "down" && index === homeLayout.length - 1) return;
+
+    const updated = [...homeLayout];
+    const swapTarget = direction === "up" ? index - 1 : index + 1;
+    
+    // Swap elements
+    const temp = updated[index];
+    updated[index] = updated[swapTarget];
+    updated[swapTarget] = temp;
+
+    setHomeLayout(updated);
+    await saveLayoutConfig(updated);
+  };
+
+  // Toggle visibility of a section
+  const handleToggleSectionVisibility = async (sectionId: string) => {
+    const updated = homeLayout.map((sec) => {
+      if (sec.section_id === sectionId) {
+        return { ...sec, visible: !sec.visible };
+      }
+      return sec;
+    });
+
+    setHomeLayout(updated);
+    await saveLayoutConfig(updated);
+  };
+
+  // Delete section from configuration
+  const handleDeleteSection = async (sectionId: string) => {
+    if (!window.confirm(`Are you sure you want to remove the section: "${sectionId}"?`)) {
+      return;
+    }
+
+    const updated = homeLayout.filter((sec) => sec.section_id !== sectionId);
+    setHomeLayout(updated);
+    await saveLayoutConfig(updated);
+  };
+
+  // Save layout section from form (Add / Edit)
+  const handleSaveSectionForm = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!layoutSectionId.trim()) {
+      setLayoutMessage({ text: "Section ID is required and must be unique.", type: "error" });
+      return;
+    }
+
+    // Check uniqueness if adding new section
+    if (!layoutEditingId && homeLayout.some((sec) => sec.section_id.toLowerCase() === layoutSectionId.trim().toLowerCase())) {
+      setLayoutMessage({ text: "Section ID must be unique. A section with this ID already exists.", type: "error" });
+      return;
+    }
+
+    const cleanedSectionId = layoutSectionId.trim();
+    const cleanedTitle = layoutTitleInput.trim() || "New Section";
+
+    const newSection: any = {
+      section_id: cleanedSectionId,
+      layout_type: layoutTypeInput,
+      title: cleanedTitle,
+      visible: layoutVisibleInput
+    };
+
+    // If it's a DRAMA_RAIL, build data_source parameters
+    if (layoutTypeInput === "DRAMA_RAIL") {
+      // Clean and split countries
+      const countriesList = layoutCountriesInput
+        .split(",")
+        .map((c) => c.trim().toUpperCase())
+        .filter((c) => c.length > 0);
+
+      newSection.data_source = {
+        media_type: layoutMediaTypeInput,
+        countries: countriesList,
+        sort_by: layoutSortByInput
+      };
+    }
+
+    let updatedLayout = [];
+    if (layoutEditingId) {
+      // Overwrite existing section
+      updatedLayout = homeLayout.map((sec) => {
+        if (sec.section_id === layoutEditingId) {
+          return newSection;
+        }
+        return sec;
+      });
+    } else {
+      // Append new section to the layout
+      updatedLayout = [...homeLayout, newSection];
+    }
+
+    const success = await saveLayoutConfig(updatedLayout);
+    if (success) {
+      // Reset inputs
+      setLayoutSectionId("");
+      setLayoutTitleInput("");
+      setLayoutTypeInput("DRAMA_RAIL");
+      setLayoutVisibleInput(true);
+      setLayoutMediaTypeInput("all");
+      setLayoutCountriesInput("KR, JP");
+      setLayoutSortByInput("popularity");
+      setLayoutEditingId(null);
     }
   };
 
@@ -466,11 +812,11 @@ export default function App() {
                   id: dramaId,
                   title: item.drama.title,
                   type: item.drama.type || "tv",
-                  poster_path: item.drama.poster_url,
+                  poster_path: item.drama.backdrop_url,
                   backdrop_path: item.drama.backdrop_url,
                   vote_average: item.drama.rating || 0.0,
                   release_date: item.drama.year ? `${item.drama.year}-01-01` : "",
-                  overview: item.drama.overview || ""
+                  overview: item.drama.synopsis || item.drama.overview || ""
                 };
               }
             }
@@ -490,6 +836,191 @@ export default function App() {
       return false;
     } finally {
       setHeroSaving(false);
+    }
+  };
+
+  // Start Slide Editing
+  const handleStartEditSlide = (position: number) => {
+    const pinnedItem = heroConfig.pinned_items.find(p => p.position === position);
+    const details = pinnedItem ? resolvedDramas[pinnedItem.drama_id] : null;
+    const itemDrama = pinnedItem?.drama;
+
+    if (details) {
+      setSlideTitleInput(details.title || "");
+      setSlideIdInput(pinnedItem?.drama_id || "");
+      setSlideYearInput(details.release_date ? parseInt(details.release_date.split("-")[0], 10) || 2024 : 2024);
+      setSlideRatingInput(details.vote_average || 8.0);
+      setSlideTypeInput(details.type || "tv");
+      setSlideBackdropInput(details.backdrop_path || "");
+      setSlideOverviewInput(details.overview || "");
+      setSlideCountryInput(details.country || "KR");
+    } else if (itemDrama) {
+      setSlideTitleInput(itemDrama.title || "");
+      setSlideIdInput(pinnedItem?.drama_id || "");
+      setSlideYearInput(itemDrama.year || 2024);
+      setSlideRatingInput(itemDrama.rating || 8.0);
+      setSlideTypeInput(itemDrama.type || "tv");
+      setSlideBackdropInput(itemDrama.backdrop_url || "");
+      setSlideOverviewInput(itemDrama.synopsis || "");
+      setSlideCountryInput(itemDrama.country || "KR");
+    } else {
+      setSlideTitleInput("");
+      setSlideIdInput("");
+      setSlideYearInput(2024);
+      setSlideRatingInput(8.0);
+      setSlideTypeInput("tv");
+      setSlideBackdropInput("");
+      setSlideOverviewInput("");
+      setSlideCountryInput("KR");
+    }
+
+    setEditingSlidePos(position);
+    setSlideSearchQuery("");
+    setSlideSearchResults([]);
+    setSlideSearchLoading(false);
+  };
+
+  // Search inside slide edit modal
+  const handleSlideSearch = async (e?: React.FormEvent) => {
+    if (e) e.preventDefault();
+    if (!slideSearchQuery.trim()) return;
+    setSlideSearchLoading(true);
+    try {
+      const response = await fetch(`/api/tmdb/search?query=${encodeURIComponent(slideSearchQuery)}`);
+      const json = await response.json();
+      if (json.success && json.results) {
+        setSlideSearchResults(json.results);
+      }
+    } catch (err) {
+      console.error("Search failed in slide modal:", err);
+    } finally {
+      setSlideSearchLoading(false);
+    }
+  };
+
+  // Auto-fill from search results in slide edit modal
+  const handleAutoFillSlide = (show: any) => {
+    setSlideTitleInput(show.title || "");
+    setSlideIdInput(show.id || "");
+    setSlideYearInput(show.release_date ? parseInt(show.release_date.split("-")[0], 10) || 2024 : 2024);
+    setSlideRatingInput(8.0);
+    setSlideTypeInput(show.type === "movie" ? "movie" : "tv");
+    
+    let backdrop = show.backdrop_path || show.poster_path || "";
+    if (backdrop && backdrop.includes("/t/p/w1280/")) {
+      backdrop = backdrop.replace("/t/p/w1280/", "/t/p/w500/");
+    }
+    setSlideBackdropInput(backdrop);
+    setSlideOverviewInput(show.overview || "");
+    setSlideCountryInput("KR");
+  };
+
+  // Apply edits to slide slot
+  const handleApplySlideEdit = () => {
+    if (editingSlidePos === null) return;
+    if (!slideTitleInput.trim()) {
+      addLog("Slide title cannot be empty.", "error");
+      return;
+    }
+
+    const dId = slideIdInput.trim() || `mock_${Date.now()}`;
+    const cleanBackdrop = slideBackdropInput.trim();
+    const cleanPoster = cleanBackdrop;
+
+    const updatedDrama = {
+      slug: `${slideTypeInput}-${dId}`,
+      title: slideTitleInput.trim(),
+      backdrop_url: cleanBackdrop,
+      rating: Number(slideRatingInput) || 8.0,
+      year: Number(slideYearInput) || 2024,
+      type: slideTypeInput,
+      country: slideCountryInput.trim() || "KR",
+      synopsis: slideOverviewInput.trim()
+    };
+
+    const updatedPins = heroConfig.pinned_items.filter(p => p.position !== editingSlidePos);
+    updatedPins.push({
+      drama_id: dId,
+      position: editingSlidePos,
+      drama: updatedDrama
+    });
+
+    updatedPins.sort((a, b) => a.position - b.position);
+
+    const newConfig = {
+      ...heroConfig,
+      pinned_items: updatedPins
+    };
+
+    setHeroConfig(newConfig);
+
+    // Cache details immediately to keep UI in sync
+    setResolvedDramas(prev => ({
+      ...prev,
+      [dId]: {
+        id: dId,
+        title: updatedDrama.title,
+        type: updatedDrama.type,
+        poster_path: cleanPoster,
+        backdrop_path: updatedDrama.backdrop_url,
+        vote_average: updatedDrama.rating,
+        release_date: `${updatedDrama.year}-01-01`,
+        overview: updatedDrama.synopsis,
+        country: updatedDrama.country
+      }
+    }));
+
+    addLog(`Applied modifications to Slide #${editingSlidePos} locally. Click 'Save & Publish' to write to repository.`, "info");
+    setEditingSlidePos(null);
+  };
+
+  // Move slide up or down
+  const handleMoveSlide = (position: number, direction: "up" | "down") => {
+    const targetPos = direction === "up" ? position - 1 : position + 1;
+    if (targetPos < 1 || targetPos > heroConfig.max_items) return;
+
+    const itemAtCurrent = heroConfig.pinned_items.find(p => p.position === position);
+    const itemAtTarget = heroConfig.pinned_items.find(p => p.position === targetPos);
+
+    let updatedPins = heroConfig.pinned_items.filter(p => p.position !== position && p.position !== targetPos);
+
+    if (itemAtCurrent) {
+      updatedPins.push({
+        ...itemAtCurrent,
+        position: targetPos
+      });
+    }
+
+    if (itemAtTarget) {
+      updatedPins.push({
+        ...itemAtTarget,
+        position: position
+      });
+    }
+
+    updatedPins.sort((a, b) => a.position - b.position);
+
+    setHeroConfig(prev => ({
+      ...prev,
+      pinned_items: updatedPins
+    }));
+
+    addLog(`Swapped positions of Slide #${position} and Slide #${targetPos}.`, "info");
+  };
+
+  // Clear a slide position
+  const handleClearSlide = (position: number) => {
+    const item = heroConfig.pinned_items.find(p => p.position === position);
+    if (!item) return;
+
+    const title = resolvedDramas[item.drama_id]?.title || item.drama?.title || item.drama_id;
+    if (window.confirm(`Are you sure you want to clear the pinned drama "${title}" from Slide #${position}?`)) {
+      const updatedPins = heroConfig.pinned_items.filter(p => p.position !== position);
+      setHeroConfig(prev => ({
+        ...prev,
+        pinned_items: updatedPins
+      }));
+      addLog(`Cleared Slide #${position}.`, "info");
     }
   };
 
@@ -517,11 +1048,11 @@ export default function App() {
                   id: dramaId,
                   title: item.drama.title,
                   type: item.drama.type || "tv",
-                  poster_path: item.drama.poster_url,
+                  poster_path: item.drama.backdrop_url,
                   backdrop_path: item.drama.backdrop_url,
                   vote_average: item.drama.rating || 0.0,
                   release_date: item.drama.year ? `${item.drama.year}-01-01` : "",
-                  overview: item.drama.overview || ""
+                  overview: item.drama.synopsis || item.drama.overview || ""
                 };
               }
             }
@@ -659,6 +1190,19 @@ export default function App() {
     addLog(`Deleted local snapshot '${name}'.`, "info");
   };
 
+  // Automatically select the first available slot for new pins
+  useEffect(() => {
+    const occupiedPositions = heroConfig.pinned_items.map(p => p.position);
+    let firstAvailableSlot = 1;
+    for (let s = 1; s <= heroConfig.max_items; s++) {
+      if (!occupiedPositions.includes(s)) {
+        firstAvailableSlot = s;
+        break;
+      }
+    }
+    setNewPinnedPosition(firstAvailableSlot);
+  }, [heroConfig.pinned_items, heroConfig.max_items]);
+
   // Sync theme choices to body and local storage
   useEffect(() => {
     if (isDark) {
@@ -678,6 +1222,12 @@ export default function App() {
   useEffect(() => {
     if (isAuthenticated) {
       fetchSystemStats();
+    }
+    if (isAuthenticated && activeTab === "streams") {
+      fetchDramaLinks();
+    }
+    if (isAuthenticated && activeTab === "layout") {
+      fetchHomeLayout();
     }
   }, [isAuthenticated, activeTab]);
 
@@ -993,6 +1543,16 @@ export default function App() {
   // Active genre details helper
   const activeGenrePreview = genres.find(g => g.name === selectedPreviewGenreId) || genres[0];
 
+  // Find the first available slot to use as the default for new pins
+  const occupiedPositions = heroConfig.pinned_items.map(p => p.position);
+  let firstAvailableSlot = 1;
+  for (let s = 1; s <= heroConfig.max_items; s++) {
+    if (!occupiedPositions.includes(s)) {
+      firstAvailableSlot = s;
+      break;
+    }
+  }
+
   if (!isAuthenticated) {
     return (
       <div className={`min-h-screen flex flex-col items-center justify-center font-sans p-6 transition-colors duration-300 relative ${
@@ -1221,6 +1781,56 @@ export default function App() {
                     <GitBranch className="w-4 h-4" />
                     <span>Production CDN</span>
                   </div>
+                </button>
+
+                <button
+                  onClick={() => setActiveTab("streams")}
+                  className={`w-full flex items-center justify-between px-3.5 py-2.5 rounded-xl text-xs font-bold transition-all duration-300 ${
+                    activeTab === "streams"
+                      ? "bg-indigo-600 text-white shadow-md shadow-indigo-600/10"
+                      : isDark
+                        ? "text-slate-400 hover:text-slate-200 hover:bg-slate-800/50"
+                        : "text-slate-600 hover:text-slate-900 hover:bg-slate-100"
+                  }`}
+                >
+                  <div className="flex items-center gap-2.5">
+                    <Video className="w-4 h-4" />
+                    <span>Media Stream Injector</span>
+                  </div>
+                  <span className={`text-[9px] font-bold px-2 py-0.5 rounded-full ${
+                    activeTab === "streams"
+                      ? "bg-indigo-700 text-white"
+                      : isDark
+                        ? "bg-emerald-950/40 text-emerald-400"
+                        : "bg-emerald-50 text-emerald-600"
+                  }`}>
+                    {Object.keys(dramaLinks).length}
+                  </span>
+                </button>
+
+                <button
+                  onClick={() => setActiveTab("layout")}
+                  className={`w-full flex items-center justify-between px-3.5 py-2.5 rounded-xl text-xs font-bold transition-all duration-300 ${
+                    activeTab === "layout"
+                      ? "bg-indigo-600 text-white shadow-md shadow-indigo-600/10"
+                      : isDark
+                        ? "text-slate-400 hover:text-slate-200 hover:bg-slate-800/50"
+                        : "text-slate-600 hover:text-slate-900 hover:bg-slate-100"
+                  }`}
+                >
+                  <div className="flex items-center gap-2.5">
+                    <Layers className="w-4 h-4" />
+                    <span>Home Screen Engine</span>
+                  </div>
+                  <span className={`text-[9px] font-bold px-2 py-0.5 rounded-full ${
+                    activeTab === "layout"
+                      ? "bg-indigo-700 text-white"
+                      : isDark
+                        ? "bg-indigo-950/40 text-indigo-400"
+                        : "bg-indigo-50 text-indigo-600"
+                  }`}>
+                    {homeLayout.length}
+                  </span>
                 </button>
 
                 <button
@@ -2019,18 +2629,17 @@ export default function App() {
                 <div>
                   <h1 className="text-2xl font-black tracking-tight flex items-center gap-2">
                     <Tv className="w-6 h-6 text-indigo-500 animate-pulse" />
-                    Hero Banner Pager
+                    Hero Banner Dashboard
                   </h1>
                   <p className="text-xs text-slate-400 mt-0.5">
-                    Configure the dynamic hero slider, set auto/manual curate modes, and pin specific dramas to positions.
+                    Easily arrange and modify dramas and films displayed in the app's main hero banner.
                   </p>
                 </div>
                 
-                {/* Sync Actions */}
-                <div className="flex items-center gap-2 flex-wrap">
+                <div className="flex items-center gap-2">
                   <button
                     onClick={() => loadHeroConfig()}
-                    disabled={heroLoading || heroSaving || heroSyncing}
+                    disabled={heroLoading}
                     className={`h-9 px-4 rounded-xl text-xs font-bold transition-all duration-300 flex items-center gap-1.5 border ${
                       isDark 
                         ? "bg-[#11192e] border-[#1e2942] hover:bg-[#1c294a] text-slate-200" 
@@ -2038,28 +2647,15 @@ export default function App() {
                     }`}
                   >
                     <RefreshCw className={`w-3.5 h-3.5 ${heroLoading ? "animate-spin" : ""}`} />
-                    Refresh Config
-                  </button>
-                  <button
-                    onClick={() => syncHeroMetadata()}
-                    disabled={heroLoading || heroSaving || heroSyncing}
-                    className={`h-9 px-4 rounded-xl text-xs font-bold transition-all duration-300 flex items-center gap-1.5 border ${
-                      isDark 
-                        ? "bg-[#1b1c1e] border-[#312a1d] hover:bg-[#2b2518] text-amber-400" 
-                        : "bg-amber-50 border-amber-200 hover:bg-amber-100 text-amber-800 shadow-sm"
-                    }`}
-                    title="Force refresh and synchronize of TMDb ratings, titles, and poster metadata for all pinned dramas"
-                  >
-                    <RefreshCw className={`w-3.5 h-3.5 ${heroSyncing ? "animate-spin" : ""}`} />
-                    {heroSyncing ? "Syncing Metadata..." : "Sync Pinned Metadata"}
+                    Refresh
                   </button>
                   <button
                     onClick={() => saveHeroConfig()}
-                    disabled={heroLoading || heroSaving || heroSyncing}
-                    className="h-9 px-4 rounded-xl text-xs font-bold text-white bg-indigo-600 hover:bg-indigo-500 transition-all duration-300 shadow-md shadow-indigo-600/15 flex items-center gap-1.5 active:scale-95 disabled:opacity-50"
+                    disabled={heroSaving}
+                    className="h-9 px-4 rounded-xl text-xs font-black bg-emerald-600 hover:bg-emerald-500 text-white transition-all flex items-center gap-1.5 shadow-md shadow-emerald-900/10"
                   >
-                    <Save className="w-3.5 h-3.5" />
-                    {heroSaving ? "Deploying..." : "Save & Commit"}
+                    <Save className="w-4 h-4" />
+                    {heroSaving ? "Saving..." : "Save & Publish"}
                   </button>
                 </div>
               </div>
@@ -2257,17 +2853,24 @@ export default function App() {
                                   <div className="flex items-center gap-1.5 shrink-0">
                                     <select
                                       id={`slot-select-${show.id}`}
+                                      defaultValue={firstAvailableSlot}
                                       className={`h-7 px-2 py-0 rounded-lg text-[10px] font-bold focus:outline-none transition-colors border ${
                                         isDark 
                                           ? "bg-[#161f38] border-[#223054] text-slate-100" 
                                           : "bg-white border-slate-250 text-slate-700"
                                       }`}
                                     >
-                                      {Array.from({ length: heroConfig.max_items }).map((_, i) => (
-                                        <option key={i + 1} value={i + 1}>
-                                          Slot #{i + 1}
-                                        </option>
-                                      ))}
+                                      {Array.from({ length: heroConfig.max_items }).map((_, i) => {
+                                        const slotNum = i + 1;
+                                        const pinnedItem = heroConfig.pinned_items.find(p => p.position === slotNum);
+                                        const details = pinnedItem ? resolvedDramas[pinnedItem.drama_id] : null;
+                                        const slotTitle = details?.title || pinnedItem?.drama?.title || pinnedItem?.drama_id;
+                                        return (
+                                          <option key={slotNum} value={slotNum}>
+                                            Slot #{slotNum} {pinnedItem ? `(Occupied: ${slotTitle})` : "(Available)"}
+                                          </option>
+                                        );
+                                      })}
                                     </select>
                                     
                                     <button
@@ -2392,11 +2995,17 @@ export default function App() {
                                       : "bg-white border-slate-200 text-slate-700"
                                   }`}
                                 >
-                                  {Array.from({ length: heroConfig.max_items }).map((_, i) => (
-                                    <option key={i + 1} value={i + 1}>
-                                      Slot #{i + 1}
-                                    </option>
-                                  ))}
+                                  {Array.from({ length: heroConfig.max_items }).map((_, i) => {
+                                    const slotNum = i + 1;
+                                    const pinnedItem = heroConfig.pinned_items.find(p => p.position === slotNum);
+                                    const details = pinnedItem ? resolvedDramas[pinnedItem.drama_id] : null;
+                                    const slotTitle = details?.title || pinnedItem?.drama?.title || pinnedItem?.drama_id;
+                                    return (
+                                      <option key={slotNum} value={slotNum}>
+                                        Slot #{slotNum} {pinnedItem ? `(Occupied: ${slotTitle})` : "(Available)"}
+                                      </option>
+                                    );
+                                  })}
                                 </select>
                               </div>
 
@@ -2446,11 +3055,17 @@ export default function App() {
                                       : "bg-slate-50 border-slate-200 text-slate-700"
                                   }`}
                                 >
-                                  {Array.from({ length: heroConfig.max_items }).map((_, i) => (
-                                    <option key={i + 1} value={i + 1}>
-                                      Slot #{i + 1}
-                                    </option>
-                                  ))}
+                                  {Array.from({ length: heroConfig.max_items }).map((_, i) => {
+                                    const slotNum = i + 1;
+                                    const pinnedItem = heroConfig.pinned_items.find(p => p.position === slotNum);
+                                    const details = pinnedItem ? resolvedDramas[pinnedItem.drama_id] : null;
+                                    const slotTitle = details?.title || pinnedItem?.drama?.title || pinnedItem?.drama_id;
+                                    return (
+                                      <option key={slotNum} value={slotNum}>
+                                        Slot #{slotNum} {pinnedItem ? `(Occupied: ${slotTitle})` : "(Available)"}
+                                      </option>
+                                    );
+                                  })}
                                 </select>
                                 <button
                                   onClick={() => {
@@ -2602,7 +3217,21 @@ export default function App() {
                               (() => {
                                 const details = resolvedDramas[pinnedItem.drama_id];
                                 return details ? (
-                                  <div className="flex items-center gap-3 text-left">
+                                  <div 
+                                    onClick={() => {
+                                      setSlideTitleInput(details.title || "");
+                                      setSlideIdInput(pinnedItem.drama_id || "");
+                                      setSlideYearInput(details.release_date ? parseInt(details.release_date.split("-")[0], 10) || 2024 : 2024);
+                                      setSlideRatingInput(details.vote_average || 8.0);
+                                      setSlideTypeInput(details.type === "movie" || details.type === "Movie" ? "movie" : "tv");
+                                      setSlideBackdropInput(details.backdrop_path || details.poster_path || "");
+                                      setSlideOverviewInput(details.overview || "");
+                                      setSlideCountryInput(details.country || "KR");
+                                      setEditingSlidePos(pos);
+                                    }}
+                                    className="flex items-center gap-3 text-left cursor-pointer hover:opacity-80 transition-opacity active:scale-[0.99] origin-left group/title select-none"
+                                    title="Click to Edit Slide"
+                                  >
                                     {details.poster_path && (
                                       <img
                                         src={details.poster_path}
@@ -2613,8 +3242,9 @@ export default function App() {
                                     )}
                                     <div className="flex flex-col">
                                       <div className="flex flex-wrap items-center gap-2">
-                                        <span className="text-xs font-black tracking-tight text-slate-900 dark:text-slate-100">
+                                        <span className="text-xs font-black tracking-tight text-slate-900 dark:text-slate-100 flex items-center gap-1">
                                           {details.title}
+                                          <Pencil className="w-2.5 h-2.5 text-indigo-400 opacity-0 group-hover/title:opacity-100 transition-opacity shrink-0" />
                                         </span>
                                         {details.vote_average > 0 && (
                                           <span className="text-[9px] font-black bg-amber-500/10 text-amber-500 px-1.5 py-0.5 rounded border border-amber-500/10">
@@ -2642,7 +3272,21 @@ export default function App() {
                                     </div>
                                   </div>
                                 ) : (
-                                  <div className="text-left">
+                                  <div 
+                                    onClick={() => {
+                                      setSlideTitleInput("");
+                                      setSlideIdInput(pinnedItem.drama_id || "");
+                                      setSlideYearInput(2024);
+                                      setSlideRatingInput(8.0);
+                                      setSlideTypeInput("tv");
+                                      setSlideBackdropInput("");
+                                      setSlideOverviewInput("");
+                                      setSlideCountryInput("KR");
+                                      setEditingSlidePos(pos);
+                                    }}
+                                    className="text-left cursor-pointer hover:opacity-80 transition-opacity select-none"
+                                    title="Click to Edit Slide"
+                                  >
                                     <div className="flex items-center gap-2">
                                       <span className="text-xs font-black font-mono tracking-wide text-indigo-400 dark:text-indigo-300">
                                         {pinnedItem.drama_id}
@@ -2658,7 +3302,21 @@ export default function App() {
                                 );
                               })()
                             ) : (
-                              <div className="text-left">
+                              <div 
+                                onClick={() => {
+                                  setSlideTitleInput("");
+                                  setSlideIdInput("");
+                                  setSlideYearInput(2024);
+                                  setSlideRatingInput(8.0);
+                                  setSlideTypeInput("tv");
+                                  setSlideBackdropInput("");
+                                  setSlideOverviewInput("");
+                                  setSlideCountryInput("KR");
+                                  setEditingSlidePos(pos);
+                                }}
+                                className="text-left cursor-pointer hover:opacity-80 transition-opacity select-none"
+                                title="Click to Program Slot Manually"
+                              >
                                 <div className="flex items-center gap-2">
                                   <span className="text-xs font-bold text-slate-500 italic">
                                     {heroConfig.mode === "MANUAL" 
@@ -2672,30 +3330,82 @@ export default function App() {
                                   )}
                                 </div>
                                 <p className="text-[10px] text-slate-500 mt-0.5">
-                                  System will fetch top dramas and dynamically map results here.
+                                  System will fetch top dramas and dynamically map results here. Click to manually fill this slot.
                                 </p>
                               </div>
                             )}
                           </div>
-
+ 
                           {/* Slide Actions */}
-                          {isPinned && (
-                            <button
-                              onClick={() => {
-                                const details = resolvedDramas[pinnedItem.drama_id];
-                                const title = details?.title || pinnedItem.drama_id;
-                                setPendingUnpin({
-                                  drama_id: pinnedItem.drama_id,
-                                  position: pos,
-                                  title: title
-                                });
-                              }}
-                              className="p-1.5 rounded-lg hover:bg-rose-500/10 text-rose-500 transition-colors cursor-pointer"
-                              title="Unpin Drama"
-                            >
-                              <X className="w-4 h-4" />
-                            </button>
-                          )}
+                          <div className="flex items-center gap-1 shrink-0">
+                            {isPinned ? (
+                              <>
+                                <button
+                                  onClick={() => {
+                                    const details = resolvedDramas[pinnedItem.drama_id];
+                                    if (details) {
+                                      setSlideTitleInput(details.title || "");
+                                      setSlideIdInput(pinnedItem.drama_id || "");
+                                      setSlideYearInput(details.release_date ? parseInt(details.release_date.split("-")[0], 10) || 2024 : 2024);
+                                      setSlideRatingInput(details.vote_average || 8.0);
+                                      setSlideTypeInput(details.type === "movie" || details.type === "Movie" ? "movie" : "tv");
+                                      setSlideBackdropInput(details.backdrop_path || details.poster_path || "");
+                                      setSlideOverviewInput(details.overview || "");
+                                      setSlideCountryInput(details.country || "KR");
+                                    } else {
+                                      setSlideTitleInput("");
+                                      setSlideIdInput(pinnedItem.drama_id || "");
+                                      setSlideYearInput(2024);
+                                      setSlideRatingInput(8.0);
+                                      setSlideTypeInput("tv");
+                                      setSlideBackdropInput("");
+                                      setSlideOverviewInput("");
+                                      setSlideCountryInput("KR");
+                                    }
+                                    setEditingSlidePos(pos);
+                                  }}
+                                  className="p-1.5 rounded-lg hover:bg-indigo-500/10 text-indigo-400 hover:text-indigo-300 transition-colors cursor-pointer"
+                                  title="Edit Slide"
+                                >
+                                  <Pencil className="w-4 h-4" />
+                                </button>
+                                
+                                <button
+                                  onClick={() => {
+                                    const details = resolvedDramas[pinnedItem.drama_id];
+                                    const title = details?.title || pinnedItem.drama_id;
+                                    setPendingUnpin({
+                                      drama_id: pinnedItem.drama_id,
+                                      position: pos,
+                                      title: title
+                                    });
+                                  }}
+                                  className="p-1.5 rounded-lg hover:bg-rose-500/10 text-rose-500 transition-colors cursor-pointer"
+                                  title="Unpin Drama"
+                                >
+                                  <X className="w-4 h-4" />
+                                </button>
+                              </>
+                            ) : (
+                              <button
+                                onClick={() => {
+                                  setSlideTitleInput("");
+                                  setSlideIdInput("");
+                                  setSlideYearInput(2024);
+                                  setSlideRatingInput(8.0);
+                                  setSlideTypeInput("tv");
+                                  setSlideBackdropInput("");
+                                  setSlideOverviewInput("");
+                                  setSlideCountryInput("KR");
+                                  setEditingSlidePos(pos);
+                                }}
+                                className="p-1.5 rounded-lg hover:bg-indigo-500/10 text-indigo-400 transition-colors cursor-pointer"
+                                title="Manually Program Slot"
+                              >
+                                <Plus className="w-4 h-4" />
+                              </button>
+                            )}
+                          </div>
                         </div>
                       );
                     })}
@@ -2707,6 +3417,222 @@ export default function App() {
               </div>
 
             </div>
+
+            {/* SLIDE EDIT OVERLAY MODAL */}
+            {editingSlidePos !== null && (
+              <div className="fixed inset-0 bg-black/75 backdrop-blur-sm z-50 flex items-center justify-center p-4 overflow-y-auto">
+                <div 
+                  className={`w-full max-w-xl rounded-2xl border shadow-2xl p-6 relative flex flex-col gap-4 text-left transition-all my-8 ${
+                    isDark 
+                      ? "bg-[#0b1224]/95 border-[#1e2d4d] text-slate-100 shadow-indigo-950/20" 
+                      : "bg-white border-slate-200 text-slate-800 shadow-slate-300"
+                  }`}
+                >
+                  {/* Modal Close button */}
+                  <button
+                    onClick={() => setEditingSlidePos(null)}
+                    className="absolute right-4 top-4 p-1.5 rounded-full hover:bg-slate-500/10 transition-colors text-slate-400 hover:text-slate-200 cursor-pointer"
+                  >
+                    <X className="w-5 h-5" />
+                  </button>
+
+                  {/* Header */}
+                  <div className="border-b pb-3 transition-colors duration-300 border-slate-700/30">
+                    <h2 className="text-lg font-black tracking-tight flex items-center gap-2">
+                      <Pencil className="w-5 h-5 text-indigo-500 animate-pulse" />
+                      Edit Slide #{editingSlidePos} Details
+                    </h2>
+                    <p className="text-xs text-slate-400 mt-0.5">
+                      Configure details for this banner slide slot. Local changes will be applied instantly.
+                    </p>
+                  </div>
+
+                  {/* Form Layout */}
+                  <div className="flex flex-col gap-4">
+                    
+                    {/* Title and ID Row */}
+                    <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+                      {/* ID Input */}
+                      <div className="flex flex-col gap-1.5 font-mono">
+                        <label className="text-[10px] font-extrabold text-slate-400 uppercase tracking-wider">TMDB / Drama ID</label>
+                        <input 
+                          type="text" 
+                          value={slideIdInput}
+                          onChange={(e) => setSlideIdInput(e.target.value)}
+                          placeholder="e.g. 111837..."
+                          className={`w-full h-10 px-3 rounded-xl focus:outline-none focus:ring-2 focus:ring-indigo-500 text-xs transition-colors duration-300 border ${
+                            isDark 
+                              ? "bg-[#11192e] border-[#1e2942] text-slate-100 placeholder-slate-600" 
+                              : "bg-slate-50 border-slate-200 text-slate-700 placeholder-slate-400"
+                          }`}
+                        />
+                      </div>
+
+                      {/* Title Input */}
+                      <div className="flex flex-col gap-1.5 sm:col-span-2">
+                        <label className="text-[10px] font-extrabold text-slate-400 uppercase tracking-wider">Title Name</label>
+                        <input 
+                          type="text" 
+                          value={slideTitleInput}
+                          onChange={(e) => setSlideTitleInput(e.target.value)}
+                          placeholder="e.g. Vincenzo..."
+                          className={`w-full h-10 px-3 rounded-xl focus:outline-none focus:ring-2 focus:ring-indigo-500 font-semibold text-xs transition-colors duration-300 border ${
+                            isDark 
+                              ? "bg-[#11192e] border-[#1e2942] text-slate-100 placeholder-slate-600" 
+                              : "bg-slate-50 border-slate-200 text-slate-700 placeholder-slate-400"
+                          }`}
+                        />
+                      </div>
+                    </div>
+
+                    {/* Metadata elements: Year, Rating, Type, Country */}
+                    <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
+                      {/* Type Selector */}
+                      <div className="flex flex-col gap-1.5">
+                        <label className="text-[10px] font-extrabold text-slate-400 uppercase tracking-wider">Type</label>
+                        <select
+                          value={slideTypeInput}
+                          onChange={(e) => setSlideTypeInput(e.target.value as "tv" | "movie")}
+                          className={`w-full h-10 px-3 rounded-xl focus:outline-none focus:ring-2 focus:ring-indigo-500 text-xs transition-colors duration-300 border ${
+                            isDark 
+                              ? "bg-[#11192e] border-[#1e2942] text-slate-100" 
+                              : "bg-slate-50 border-slate-200 text-slate-700"
+                          }`}
+                        >
+                          <option value="tv">TV Show</option>
+                          <option value="movie">Movie</option>
+                        </select>
+                      </div>
+
+                      {/* Year Input */}
+                      <div className="flex flex-col gap-1.5">
+                        <label className="text-[10px] font-extrabold text-slate-400 uppercase tracking-wider">Release Year</label>
+                        <input 
+                          type="number" 
+                          value={slideYearInput}
+                          onChange={(e) => setSlideYearInput(parseInt(e.target.value, 10) || 2024)}
+                          placeholder="2024"
+                          className={`w-full h-10 px-3 rounded-xl focus:outline-none focus:ring-2 focus:ring-indigo-500 text-xs transition-colors duration-300 border ${
+                            isDark 
+                              ? "bg-[#11192e] border-[#1e2942] text-slate-100" 
+                              : "bg-slate-50 border-slate-200 text-slate-700"
+                          }`}
+                        />
+                      </div>
+
+                      {/* Rating Input */}
+                      <div className="flex flex-col gap-1.5">
+                        <label className="text-[10px] font-extrabold text-slate-400 uppercase tracking-wider">Rating (vote_avg)</label>
+                        <input 
+                          type="number" 
+                          step="0.1"
+                          min="0"
+                          max="10"
+                          value={slideRatingInput}
+                          onChange={(e) => setSlideRatingInput(parseFloat(e.target.value) || 8.0)}
+                          placeholder="8.0"
+                          className={`w-full h-10 px-3 rounded-xl focus:outline-none focus:ring-2 focus:ring-indigo-500 text-xs transition-colors duration-300 border ${
+                            isDark 
+                              ? "bg-[#11192e] border-[#1e2942] text-slate-100" 
+                              : "bg-slate-50 border-slate-200 text-slate-700"
+                          }`}
+                        />
+                      </div>
+
+                      {/* Country Input */}
+                      <div className="flex flex-col gap-1.5">
+                        <label className="text-[10px] font-extrabold text-slate-400 uppercase tracking-wider">Country ISO</label>
+                        <input 
+                          type="text" 
+                          value={slideCountryInput}
+                          onChange={(e) => setSlideCountryInput(e.target.value.toUpperCase())}
+                          placeholder="KR"
+                          maxLength={2}
+                          className={`w-full h-10 px-3 rounded-xl focus:outline-none focus:ring-2 focus:ring-indigo-500 text-xs transition-colors duration-300 border ${
+                            isDark 
+                              ? "bg-[#11192e] border-[#1e2942] text-slate-100 placeholder-slate-600" 
+                              : "bg-slate-50 border-slate-200 text-slate-700 placeholder-slate-400"
+                          }`}
+                        />
+                      </div>
+                    </div>
+
+                    {/* Image Links fields */}
+                    <div className="flex flex-col gap-3">
+                      <div className="flex flex-col gap-1.5">
+                        <label className="text-[10px] font-extrabold text-slate-400 uppercase tracking-wider">Backdrop URL / Image Link</label>
+                        <input 
+                          type="text" 
+                          value={slideBackdropInput}
+                          onChange={(e) => setSlideBackdropInput(e.target.value)}
+                          placeholder="e.g. https://image.tmdb.org/t/p/w1280/..."
+                          className={`w-full h-10 px-3 rounded-xl focus:outline-none focus:ring-2 focus:ring-indigo-500 text-xs transition-colors duration-300 border ${
+                            isDark 
+                              ? "bg-[#11192e] border-[#1e2942] text-slate-100 placeholder-slate-600" 
+                              : "bg-slate-50 border-slate-200 text-slate-700 placeholder-slate-400"
+                          }`}
+                        />
+                      </div>
+                    </div>
+
+                    {/* Storyline Synopsis */}
+                    <div className="flex flex-col gap-1.5">
+                      <label className="text-[10px] font-extrabold text-slate-400 uppercase tracking-wider">Synopsis / Storyline</label>
+                      <textarea
+                        rows={3}
+                        value={slideOverviewInput}
+                        onChange={(e) => setSlideOverviewInput(e.target.value)}
+                        placeholder="Write a brief description or synopsis of the series/movie..."
+                        className={`w-full p-3 rounded-xl focus:outline-none focus:ring-2 focus:ring-indigo-500 text-xs transition-colors duration-300 border ${
+                          isDark 
+                            ? "bg-[#11192e] border-[#1e2942] text-slate-100 placeholder-slate-600" 
+                            : "bg-slate-50 border-slate-200 text-slate-700 placeholder-slate-400"
+                        }`}
+                      />
+                    </div>
+
+                    {/* Previews */}
+                    {slideBackdropInput && (
+                      <div className="flex flex-col gap-1 mt-1">
+                        <span className="text-[9px] font-bold text-slate-400 uppercase">Backdrop Preview</span>
+                        <div className="h-32 rounded-xl overflow-hidden bg-slate-900 border border-slate-700/20">
+                          <img 
+                            src={slideBackdropInput} 
+                            alt="Backdrop Preview" 
+                            className="w-full h-full object-cover"
+                            referrerPolicy="no-referrer"
+                          />
+                        </div>
+                      </div>
+                    )}
+
+                  </div>
+
+                  {/* Footer Actions */}
+                  <div className="flex items-center gap-3 pt-3 border-t border-slate-700/30 mt-2">
+                    <button 
+                      onClick={handleApplySlideEdit}
+                      className="flex-1 h-10 bg-indigo-600 hover:bg-indigo-500 text-white font-bold rounded-xl shadow-md transition-all active:scale-[0.98] flex items-center justify-center gap-2 text-xs cursor-pointer"
+                    >
+                      <Save className="w-4 h-4" />
+                      Apply Modifications
+                    </button>
+                    
+                    <button 
+                      onClick={() => setEditingSlidePos(null)}
+                      className={`px-4 h-10 font-bold rounded-xl transition-colors text-xs cursor-pointer ${
+                        isDark 
+                          ? "bg-[#11192e] text-slate-300 hover:bg-[#1a2544] border border-[#1e2d4d]" 
+                          : "bg-slate-100 text-slate-600 hover:bg-slate-200"
+                      }`}
+                    >
+                      Cancel
+                    </button>
+                  </div>
+
+                </div>
+              </div>
+            )}
           </div>
         )}
 
@@ -2739,9 +3665,17 @@ export default function App() {
                     }`}>
                       <div className="flex flex-col gap-0.5">
                         <span className="text-[9px] text-slate-400 uppercase tracking-widest text-left">Git Repository Owner</span>
-                        <span className={`font-bold text-left ${isDark ? "text-slate-200" : "text-slate-800"}`}>HanZone Studio</span>
+                        <span className={`font-bold text-left ${isDark ? "text-slate-200" : "text-slate-800"}`}>
+                          {systemStats?.owner && systemStats.owner !== "Not Set" ? systemStats.owner : "HanZone Studio"}
+                        </span>
                       </div>
-                      <span className="text-[10px] font-bold px-2 py-0.5 rounded bg-emerald-500/10 text-emerald-500 uppercase">Configured</span>
+                      <span className={`text-[10px] font-bold px-2 py-0.5 rounded uppercase ${
+                        systemStats?.owner && systemStats.owner !== "Not Set" 
+                          ? "bg-emerald-500/10 text-emerald-500 border border-emerald-500/10" 
+                          : "bg-amber-500/10 text-amber-500 border border-amber-500/10"
+                      }`}>
+                        {systemStats?.owner && systemStats.owner !== "Not Set" ? "Configured" : "Placeholder"}
+                      </span>
                     </div>
 
                     <div className={`p-3 rounded-xl border flex items-center justify-between transition-colors duration-300 ${
@@ -2749,9 +3683,17 @@ export default function App() {
                     }`}>
                       <div className="flex flex-col gap-0.5">
                         <span className="text-[9px] text-slate-400 uppercase tracking-widest text-left">Repository Name</span>
-                        <span className={`font-bold text-left ${isDark ? "text-slate-200" : "text-slate-800"}`}>hanzone-app-data</span>
+                        <span className={`font-bold text-left ${isDark ? "text-slate-200" : "text-slate-800"}`}>
+                          {systemStats?.repo && systemStats.repo !== "Not Set" ? systemStats.repo : "hanzone-app-data"}
+                        </span>
                       </div>
-                      <span className="text-[10px] font-bold px-2 py-0.5 rounded bg-emerald-500/10 text-emerald-500 uppercase">Configured</span>
+                      <span className={`text-[10px] font-bold px-2 py-0.5 rounded uppercase ${
+                        systemStats?.repo && systemStats.repo !== "Not Set" 
+                          ? "bg-emerald-500/10 text-emerald-500 border border-emerald-500/10" 
+                          : "bg-amber-500/10 text-amber-500 border border-amber-500/10"
+                      }`}>
+                        {systemStats?.repo && systemStats.repo !== "Not Set" ? "Configured" : "Placeholder"}
+                      </span>
                     </div>
 
                     <div className={`p-3 rounded-xl border flex items-center justify-between transition-colors duration-300 ${
@@ -2759,9 +3701,13 @@ export default function App() {
                     }`}>
                       <div className="flex flex-col gap-0.5">
                         <span className="text-[9px] text-slate-400 uppercase tracking-widest text-left">Active Branch</span>
-                        <span className={`font-bold text-left ${isDark ? "text-slate-200" : "text-slate-800"}`}>main (production)</span>
+                        <span className={`font-bold text-left ${isDark ? "text-slate-200" : "text-slate-800"}`}>
+                          {systemStats?.branch || "main (production)"}
+                        </span>
                       </div>
-                      <span className="text-[10px] font-bold px-2 py-0.5 rounded bg-indigo-500/10 text-indigo-500 uppercase">Default</span>
+                      <span className="text-[10px] font-bold px-2 py-0.5 rounded bg-indigo-500/10 text-indigo-500 border border-indigo-500/10 uppercase">
+                        {systemStats?.branch ? "Active" : "Default"}
+                      </span>
                     </div>
 
                     <div className={`p-3 rounded-xl border flex items-center justify-between transition-colors duration-300 ${
@@ -2769,9 +3715,11 @@ export default function App() {
                     }`}>
                       <div className="flex flex-col gap-0.5">
                         <span className="text-[9px] text-slate-400 uppercase tracking-widest text-left">Raw File path Target</span>
-                        <span className={`font-bold text-left ${isDark ? "text-slate-200" : "text-slate-800"}`}>/genres.json</span>
+                        <span className={`font-bold text-left ${isDark ? "text-slate-200" : "text-slate-800"}`}>
+                          /{systemStats?.filePath || "genres.json"}
+                        </span>
                       </div>
-                      <span className="text-[10px] font-bold px-2 py-0.5 rounded bg-emerald-500/10 text-emerald-500 uppercase">Parsed</span>
+                      <span className="text-[10px] font-bold px-2 py-0.5 rounded bg-emerald-500/10 text-emerald-500 border border-emerald-500/10 uppercase">Parsed</span>
                     </div>
                   </div>
                 </div>
@@ -2798,6 +3746,665 @@ export default function App() {
                   </button>
                 </div>
               </div>
+            </div>
+          </div>
+        )}
+
+        {/* MEDIA STREAMS SECTION */}
+        {activeTab === "streams" && (
+          <div className="flex-1 flex flex-col gap-6 overflow-y-auto pr-1 text-left animate-fade-in">
+            <div className={`rounded-2xl p-6 border transition-colors duration-300 ${
+              isDark ? "bg-[#0c1224] border-[#1e2942]" : "bg-white border-slate-200"
+            }`}>
+              <div className="flex items-center gap-2 text-indigo-500 font-black tracking-tight text-lg mb-2">
+                <Video className="w-6 h-6 animate-pulse text-indigo-500" />
+                Custom Media Streams & Download Injector
+              </div>
+              <p className={`text-xs leading-relaxed max-w-2xl mb-6 transition-colors duration-300 ${isDark ? "text-slate-400" : "text-slate-500"}`}>
+                Inject custom `.mp4`, `.m3u8`, or other streaming links directly into details queries. 
+                When a user opens details for a specific TMDB ID in the Android application, these URLs are dynamically injected into the response payload.
+              </p>
+
+              {linksMessage && (
+                <div className={`mb-4 p-3 rounded-xl text-xs font-semibold flex items-center gap-2 ${
+                  linksMessage.type === "success" 
+                    ? "bg-emerald-500/10 text-emerald-400 border border-emerald-500/20" 
+                    : "bg-rose-500/10 text-rose-400 border border-rose-500/20"
+                }`}>
+                  {linksMessage.type === "success" ? <CheckCircle className="w-4 h-4 shrink-0" /> : <AlertTriangle className="w-4 h-4 shrink-0" />}
+                  <span>{linksMessage.text}</span>
+                </div>
+              )}
+
+              <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
+                {/* Form column */}
+                <form onSubmit={handleSaveDramaLink} className="lg:col-span-5 flex flex-col gap-4">
+                  <h3 className={`text-xs font-black uppercase tracking-wider ${isDark ? "text-slate-300" : "text-slate-700"}`}>
+                    {linkEditingId ? "Edit Custom Links" : "Inject New Drama Links"}
+                  </h3>
+
+                  <div className="flex flex-col gap-1">
+                    <label className="text-[11px] font-bold text-slate-400">TMDB ID *</label>
+                    <input
+                      type="text"
+                      required
+                      placeholder="e.g. 123456"
+                      disabled={!!linkEditingId}
+                      value={linkDramaId}
+                      onChange={(e) => setLinkDramaId(e.target.value)}
+                      className={`h-10 px-3 rounded-xl text-xs font-medium border focus:outline-none transition-colors ${
+                        isDark 
+                          ? "bg-[#11192e] border-slate-700/50 text-slate-100 focus:border-indigo-500" 
+                          : "bg-slate-50 border-slate-200 text-slate-800 focus:border-indigo-500"
+                      }`}
+                    />
+                    <span className="text-[10px] text-slate-500 mt-0.5">The exact TMDB movie or TV series ID.</span>
+                  </div>
+
+                  <div className="flex flex-col gap-1">
+                    <label className="text-[11px] font-bold text-slate-400">Drama Title / Friendly Name</label>
+                    <input
+                      type="text"
+                      placeholder="e.g. Queen of Tears"
+                      value={linkTitle}
+                      onChange={(e) => setLinkTitle(e.target.value)}
+                      className={`h-10 px-3 rounded-xl text-xs font-medium border focus:outline-none transition-colors ${
+                        isDark 
+                          ? "bg-[#11192e] border-slate-700/50 text-slate-100 focus:border-indigo-500" 
+                          : "bg-slate-50 border-slate-200 text-slate-800 focus:border-indigo-500"
+                      }`}
+                    />
+                    <span className="text-[10px] text-slate-500 mt-0.5">Helps identify the drama in this list.</span>
+                  </div>
+
+                  <div className="flex flex-col gap-1">
+                    <label className="text-[11px] font-bold text-slate-400">Direct Stream URL (stream_url)</label>
+                    <input
+                      type="url"
+                      placeholder="https://example.com/stream.m3u8"
+                      value={linkStreamUrl}
+                      onChange={(e) => setLinkStreamUrl(e.target.value)}
+                      className={`h-10 px-3 rounded-xl text-xs font-medium border focus:outline-none transition-colors ${
+                        isDark 
+                          ? "bg-[#11192e] border-slate-700/50 text-slate-100 focus:border-indigo-500" 
+                          : "bg-slate-50 border-slate-200 text-slate-800 focus:border-indigo-500"
+                      }`}
+                    />
+                    <span className="text-[10px] text-slate-500 mt-0.5">Direct stream link (HLS/m3u8, MP4, etc.) for video player.</span>
+                  </div>
+
+                  <div className="flex flex-col gap-1">
+                    <label className="text-[11px] font-bold text-slate-400">Direct Download URL (download_url)</label>
+                    <input
+                      type="url"
+                      placeholder="https://example.com/download.mp4"
+                      value={linkDownloadUrl}
+                      onChange={(e) => setLinkDownloadUrl(e.target.value)}
+                      className={`h-10 px-3 rounded-xl text-xs font-medium border focus:outline-none transition-colors ${
+                        isDark 
+                          ? "bg-[#11192e] border-slate-700/50 text-slate-100 focus:border-indigo-500" 
+                          : "bg-slate-50 border-slate-200 text-slate-800 focus:border-indigo-500"
+                      }`}
+                    />
+                    <span className="text-[10px] text-slate-500 mt-0.5">Allows direct download options inside the mobile player.</span>
+                  </div>
+
+                  <div className="flex items-center gap-3 mt-2">
+                    <button
+                      type="submit"
+                      disabled={linksSaving}
+                      className="flex-1 h-11 bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 text-white font-bold rounded-xl text-xs transition-all flex items-center justify-center gap-2 cursor-pointer shadow-md"
+                    >
+                      <Save className="w-4 h-4" />
+                      {linksSaving ? "Saving..." : linkEditingId ? "Update Injected URLs" : "Inject Media URLs"}
+                    </button>
+
+                    {linkEditingId && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setLinkDramaId("");
+                          setLinkTitle("");
+                          setLinkStreamUrl("");
+                          setLinkDownloadUrl("");
+                          setLinkEditingId(null);
+                        }}
+                        className={`px-4 h-11 text-xs font-bold rounded-xl transition-all cursor-pointer ${
+                          isDark ? "bg-slate-800 text-slate-300 hover:bg-slate-700" : "bg-slate-100 text-slate-600 hover:bg-slate-200"
+                        }`}
+                      >
+                        Cancel
+                      </button>
+                    )}
+                  </div>
+                </form>
+
+                {/* Table list column */}
+                <div className="lg:col-span-7 flex flex-col gap-4">
+                  <h3 className={`text-xs font-black uppercase tracking-wider ${isDark ? "text-slate-300" : "text-slate-700"}`}>
+                    Active Injections ({Object.keys(dramaLinks).length})
+                  </h3>
+
+                  <div className={`border rounded-xl overflow-hidden ${
+                    isDark ? "border-[#1e2942]/60 bg-[#070b14]" : "border-slate-200 bg-slate-50/50"
+                  }`}>
+                    {linksLoading ? (
+                      <div className="p-12 flex flex-col items-center justify-center gap-2">
+                        <RefreshCw className="w-6 h-6 animate-spin text-indigo-500" />
+                        <span className="text-xs text-slate-400 font-medium">Loading injection points...</span>
+                      </div>
+                    ) : Object.keys(dramaLinks).length === 0 ? (
+                      <div className="p-12 flex flex-col items-center justify-center gap-2 text-center">
+                        <Video className="w-8 h-8 text-slate-500 opacity-60" />
+                        <span className="text-xs font-bold text-slate-400">No custom stream links injected yet.</span>
+                        <p className="text-[10px] text-slate-500 max-w-xs mt-1">
+                          Configure a drama's TMDB ID and input stream or download links to persist them to the backend cloud store.
+                        </p>
+                      </div>
+                    ) : (
+                      <div className="overflow-x-auto max-h-[460px]">
+                        <table className="w-full text-left text-xs">
+                          <thead>
+                            <tr className={`border-b text-[10px] font-black uppercase tracking-wider ${
+                              isDark ? "border-[#1e2942] bg-[#0c1224] text-slate-400" : "border-slate-200 bg-slate-100/80 text-slate-500"
+                            }`}>
+                              <th className="py-3 px-4">TMDB ID</th>
+                              <th className="py-3 px-4">Title / Name</th>
+                              <th className="py-3 px-4">Stream</th>
+                              <th className="py-3 px-4">Download</th>
+                              <th className="py-3 px-4 text-right">Actions</th>
+                            </tr>
+                          </thead>
+                          <tbody className="divide-y divide-slate-800/10">
+                            {Object.entries(dramaLinks).map(([id, rawItem]) => {
+                              const item = rawItem as { stream_url: string | null; download_url: string | null; title?: string };
+                              return (
+                                <tr key={id} className={`hover:bg-slate-500/5 transition-colors ${
+                                  isDark ? "text-slate-200" : "text-slate-700"
+                                }`}>
+                                  <td className="py-3 px-4 font-mono font-bold text-indigo-400 text-[11px]">{id}</td>
+                                  <td className="py-3 px-4 font-bold">{item.title || "Drama"}</td>
+                                  <td className="py-3 px-4 max-w-[120px] truncate" title={item.stream_url || "None"}>
+                                    {item.stream_url ? (
+                                      <span className="text-emerald-500 font-mono text-[10px] flex items-center gap-1">
+                                        <Play className="w-3 h-3 fill-emerald-500/20" /> Active Link
+                                      </span>
+                                    ) : <span className="text-slate-500 text-[10px]">None</span>}
+                                  </td>
+                                  <td className="py-3 px-4 max-w-[120px] truncate" title={item.download_url || "None"}>
+                                    {item.download_url ? (
+                                      <span className="text-indigo-400 font-mono text-[10px] flex items-center gap-1">
+                                        <Link className="w-3 h-3" /> Active Download
+                                      </span>
+                                    ) : <span className="text-slate-500 text-[10px]">None</span>}
+                                  </td>
+                                  <td className="py-3 px-4 text-right flex items-center justify-end gap-1.5">
+                                    <button
+                                      type="button"
+                                      onClick={() => {
+                                        setLinkDramaId(id);
+                                        setLinkTitle(item.title || "");
+                                        setLinkStreamUrl(item.stream_url || "");
+                                        setLinkDownloadUrl(item.download_url || "");
+                                        setLinkEditingId(id);
+                                      }}
+                                      className={`p-1.5 rounded-lg hover:text-indigo-500 transition-colors cursor-pointer ${
+                                        isDark ? "bg-slate-800 hover:bg-slate-700 text-slate-400" : "bg-slate-100 hover:bg-slate-200 text-slate-500"
+                                      }`}
+                                      title="Edit Injections"
+                                    >
+                                      <Pencil className="w-3.5 h-3.5" />
+                                    </button>
+                                  <button
+                                    type="button"
+                                    onClick={() => handleDeleteDramaLink(id)}
+                                    className={`p-1.5 rounded-lg hover:text-rose-500 transition-colors cursor-pointer ${
+                                      isDark ? "bg-slate-800 hover:bg-slate-700 text-slate-400" : "bg-slate-100 hover:bg-slate-200 text-slate-500"
+                                    }`}
+                                    title="Delete Injections"
+                                  >
+                                    <Trash2 className="w-3.5 h-3.5" />
+                                  </button>
+                                </td>
+                              </tr>
+                            );})}
+                          </tbody>
+                        </table>
+                      </div>
+                    )}
+                  </div>
+                </div>
+              </div>
+
+            </div>
+          </div>
+        )}
+
+        {/* HOME LAYOUT CONFIG SECTION */}
+        {activeTab === "layout" && (
+          <div className="flex-1 flex flex-col gap-6 overflow-y-auto pr-1 text-left animate-fade-in">
+            <div className={`rounded-2xl p-6 border transition-colors duration-300 ${
+              isDark ? "bg-[#0c1224] border-[#1e2942]" : "bg-white border-slate-200"
+            }`}>
+              <div className="flex items-center gap-2 text-indigo-500 font-black tracking-tight text-lg mb-2">
+                <Layers className="w-6 h-6 animate-pulse text-indigo-500" />
+                HanZone Home Layout Config Engine
+              </div>
+              <p className={`text-xs leading-relaxed max-w-2xl mb-6 transition-colors duration-300 ${isDark ? "text-slate-400" : "text-slate-500"}`}>
+                Design and manage the Android application home screen structure dynamically. Change section order, toggle visibility, and build custom mixed-country rails (e.g. merge KR & JP dramas) without redeploying the app.
+              </p>
+
+              {layoutMessage && (
+                <div className={`mb-6 p-3 rounded-xl text-xs font-semibold flex items-center gap-2 ${
+                  layoutMessage.type === "success" 
+                    ? "bg-emerald-500/10 text-emerald-400 border border-emerald-500/20" 
+                    : "bg-rose-500/10 text-rose-400 border border-rose-500/20"
+                }`}>
+                  {layoutMessage.type === "success" ? <CheckCircle className="w-4 h-4 shrink-0" /> : <AlertTriangle className="w-4 h-4 shrink-0" />}
+                  <span>{layoutMessage.text}</span>
+                </div>
+              )}
+
+              <div className="grid grid-cols-1 xl:grid-cols-12 gap-6">
+                {/* Editor Form Column */}
+                <div className="xl:col-span-4 flex flex-col gap-4">
+                  <form onSubmit={handleSaveSectionForm} className={`p-5 rounded-xl border flex flex-col gap-4 ${
+                    isDark ? "bg-[#070b14] border-[#1e2942]/60" : "bg-slate-50/50 border-slate-200"
+                  }`}>
+                    <h3 className={`text-xs font-black uppercase tracking-wider ${isDark ? "text-slate-300" : "text-slate-700"}`}>
+                      {layoutEditingId ? "✏️ Edit Layout Section" : "➕ Add Custom Section"}
+                    </h3>
+
+                    <div className="flex flex-col gap-1">
+                      <label className="text-[11px] font-bold text-slate-400">Section Unique ID *</label>
+                      <input
+                        type="text"
+                        required
+                        disabled={!!layoutEditingId}
+                        placeholder="e.g. kr_dramas"
+                        value={layoutSectionId}
+                        onChange={(e) => setLayoutSectionId(e.target.value)}
+                        className={`h-10 px-3 rounded-xl text-xs font-medium border focus:outline-none focus:border-indigo-500 transition-colors ${
+                          isDark ? "bg-[#11192e] border-slate-700/50 text-slate-100" : "bg-white border-slate-200 text-slate-800"
+                        }`}
+                      />
+                      <span className="text-[9px] text-slate-500">Must be unique, with no spaces. e.g. `trending_actors`</span>
+                    </div>
+
+                    <div className="flex flex-col gap-1">
+                      <label className="text-[11px] font-bold text-slate-400">Display Title (Human Readable) *</label>
+                      <input
+                        type="text"
+                        required
+                        placeholder="e.g. Romantic Korean Hits"
+                        value={layoutTitleInput}
+                        onChange={(e) => setLayoutTitleInput(e.target.value)}
+                        className={`h-10 px-3 rounded-xl text-xs font-medium border focus:outline-none focus:border-indigo-500 transition-colors ${
+                          isDark ? "bg-[#11192e] border-slate-700/50 text-slate-100" : "bg-white border-slate-200 text-slate-800"
+                        }`}
+                      />
+                    </div>
+
+                    <div className="flex flex-col gap-1">
+                      <label className="text-[11px] font-bold text-slate-400">Layout Style Type *</label>
+                      <select
+                        value={layoutTypeInput}
+                        onChange={(e) => setLayoutTypeInput(e.target.value)}
+                        className={`h-10 px-3 rounded-xl text-xs font-medium border focus:outline-none focus:border-indigo-500 transition-colors ${
+                          isDark ? "bg-[#11192e] border-slate-700/50 text-slate-100" : "bg-white border-slate-200 text-slate-800"
+                        }`}
+                      >
+                        <option value="HERO">HERO (Spotlight Banner)</option>
+                        <option value="TOP_10">TOP_10 (Ranked List)</option>
+                        <option value="DRAMA_RAIL">DRAMA_RAIL (Title Carousel)</option>
+                        <option value="ACTORS">ACTORS (Celebrity Profile Cards)</option>
+                      </select>
+                    </div>
+
+                    <div className="flex items-center gap-2 py-1">
+                      <input
+                        type="checkbox"
+                        id="visible_check"
+                        checked={layoutVisibleInput}
+                        onChange={(e) => setLayoutVisibleInput(e.target.checked)}
+                        className="w-4 h-4 rounded text-indigo-600 focus:ring-indigo-500"
+                      />
+                      <label htmlFor="visible_check" className="text-xs font-bold text-slate-400 cursor-pointer select-none">
+                        Visible on Android Client Home Screen
+                      </label>
+                    </div>
+
+                    {/* Data Source Details for DRAMA_RAIL */}
+                    {layoutTypeInput === "DRAMA_RAIL" && (
+                      <div className={`p-4 rounded-xl border flex flex-col gap-3 mt-1 ${
+                        isDark ? "bg-[#0c1224] border-slate-800/80" : "bg-white border-slate-100"
+                      }`}>
+                        <div className="text-[10px] font-black uppercase text-indigo-400 tracking-wider">
+                          🎯 Data Source Query Options
+                        </div>
+
+                        <div className="flex flex-col gap-1">
+                          <label className="text-[10px] font-bold text-slate-400">Media Type</label>
+                          <select
+                            value={layoutMediaTypeInput}
+                            onChange={(e) => setLayoutMediaTypeInput(e.target.value)}
+                            className={`h-8 px-2.5 rounded-lg text-xs font-medium border focus:outline-none focus:border-indigo-500 transition-colors ${
+                              isDark ? "bg-[#11192e] border-slate-700/50 text-slate-100" : "bg-slate-50 border-slate-200 text-slate-800"
+                            }`}
+                          >
+                            <option value="all">All (Movies & TV Series)</option>
+                            <option value="tv">TV Series Only</option>
+                            <option value="movie">Movies Only</option>
+                          </select>
+                        </div>
+
+                        <div className="flex flex-col gap-1">
+                          <label className="text-[10px] font-bold text-slate-400">Allowed Countries (Comma separated)</label>
+                          <input
+                            type="text"
+                            placeholder="KR, JP, CN"
+                            value={layoutCountriesInput}
+                            onChange={(e) => setLayoutCountriesInput(e.target.value)}
+                            className={`h-8 px-2.5 rounded-lg text-xs font-medium border focus:outline-none focus:border-indigo-500 transition-colors ${
+                              isDark ? "bg-[#11192e] border-slate-700/50 text-slate-100" : "bg-slate-50 border-slate-200 text-slate-800"
+                            }`}
+                          />
+                          <span className="text-[9px] text-slate-500">ISO Country codes, e.g. `KR`, `JP`, `CN`, `TW`</span>
+                        </div>
+
+                        <div className="flex flex-col gap-1">
+                          <label className="text-[10px] font-bold text-slate-400">Sort Field</label>
+                          <select
+                            value={layoutSortByInput}
+                            onChange={(e) => setLayoutSortByInput(e.target.value)}
+                            className={`h-8 px-2.5 rounded-lg text-xs font-medium border focus:outline-none focus:border-indigo-500 transition-colors ${
+                              isDark ? "bg-[#11192e] border-slate-700/50 text-slate-100" : "bg-slate-50 border-slate-200 text-slate-800"
+                            }`}
+                          >
+                            <option value="popularity">Popularity (Recommended)</option>
+                            <option value="rating">Viewer Rating</option>
+                            <option value="newest">Release Year / Newest</option>
+                          </select>
+                        </div>
+                      </div>
+                    )}
+
+                    <div className="flex items-center gap-2 mt-2">
+                      <button
+                        type="submit"
+                        disabled={layoutSaving}
+                        className="flex-1 h-11 bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 text-white font-bold rounded-xl text-xs transition-all flex items-center justify-center gap-2 cursor-pointer shadow-md"
+                      >
+                        <Save className="w-4 h-4" />
+                        {layoutSaving ? "Saving..." : layoutEditingId ? "Update Section" : "Add Section"}
+                      </button>
+
+                      {layoutEditingId && (
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setLayoutSectionId("");
+                            setLayoutTitleInput("");
+                            setLayoutTypeInput("DRAMA_RAIL");
+                            setLayoutVisibleInput(true);
+                            setLayoutMediaTypeInput("all");
+                            setLayoutCountriesInput("KR, JP");
+                            setLayoutSortByInput("popularity");
+                            setLayoutEditingId(null);
+                          }}
+                          className={`px-4 h-11 text-xs font-bold rounded-xl transition-all cursor-pointer ${
+                            isDark ? "bg-slate-800 text-slate-300 hover:bg-slate-700" : "bg-slate-100 text-slate-600 hover:bg-slate-200"
+                          }`}
+                        >
+                          Cancel
+                        </button>
+                      )}
+                    </div>
+                  </form>
+
+                  {/* Preset Quick Actions */}
+                  <div className={`p-4 rounded-xl border flex flex-col gap-2.5 ${
+                    isDark ? "bg-[#070b14] border-[#1e2942]/60" : "bg-slate-50/50 border-slate-200"
+                  }`}>
+                    <h4 className={`text-[10px] font-black uppercase tracking-wider ${isDark ? "text-slate-400" : "text-slate-500"}`}>
+                      ⚡ Configuration Presets
+                    </h4>
+                    <p className="text-[10px] text-slate-500">Apply a pre-configured template instantly. (Warning: Overwrites current settings)</p>
+                    
+                    <div className="grid grid-cols-2 gap-2 mt-1">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          if (window.confirm("Restore to default global hybrid layout?")) {
+                            saveLayoutConfig(DEFAULT_HOME_LAYOUT);
+                          }
+                        }}
+                        className={`py-2 px-2.5 rounded-lg text-[10px] font-bold text-center transition-colors cursor-pointer border ${
+                          isDark 
+                            ? "bg-indigo-950/20 border-indigo-500/20 text-indigo-400 hover:bg-indigo-950/40" 
+                            : "bg-indigo-50 border-indigo-100 text-indigo-600 hover:bg-indigo-100/80"
+                        }`}
+                      >
+                        Global Default
+                      </button>
+                      
+                      <button
+                        type="button"
+                        onClick={() => {
+                          if (window.confirm("Initialize a Korean Drama focused layout preset?")) {
+                            const krPreset = [
+                              { "section_id": "hero_banner", "layout_type": "HERO", "title": "Korean Spotlights", "visible": true },
+                              { "section_id": "top_10_kr", "layout_type": "TOP_10", "title": "Top 10 K-Dramas", "visible": true },
+                              { "section_id": "kr_romance", "layout_type": "DRAMA_RAIL", "title": "Romantic Comedies", "visible": true, "data_source": { "media_type": "tv", "countries": ["KR"], "sort_by": "popularity" } },
+                              { "section_id": "jp_cn_gems", "layout_type": "DRAMA_RAIL", "title": "Anime & Chinese Gems", "visible": true, "data_source": { "media_type": "all", "countries": ["JP", "CN"], "sort_by": "popularity" } },
+                              { "section_id": "trending_actors", "layout_type": "ACTORS", "title": "Hallyu Stars", "visible": true }
+                            ];
+                            saveLayoutConfig(krPreset);
+                          }
+                        }}
+                        className={`py-2 px-2.5 rounded-lg text-[10px] font-bold text-center transition-colors cursor-pointer border ${
+                          isDark 
+                            ? "bg-rose-950/20 border-rose-500/20 text-rose-400 hover:bg-rose-950/40" 
+                            : "bg-rose-50 border-rose-100 text-rose-600 hover:bg-rose-100/80"
+                        }`}
+                      >
+                        K-Drama Focus
+                      </button>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Section Cards List Column */}
+                <div className="xl:col-span-8 flex flex-col gap-4">
+                  <div className="flex items-center justify-between">
+                    <h3 className={`text-xs font-black uppercase tracking-wider ${isDark ? "text-slate-300" : "text-slate-700"}`}>
+                      Home Screen Rails & Ordering ({homeLayout.length})
+                    </h3>
+                    <span className="text-[10px] text-slate-500">Android app loads these rails in top-to-bottom sequence</span>
+                  </div>
+
+                  {layoutLoading ? (
+                    <div className="p-16 flex flex-col items-center justify-center gap-2 border rounded-xl">
+                      <RefreshCw className="w-6 h-6 animate-spin text-indigo-500" />
+                      <span className="text-xs text-slate-400 font-medium">Loading layout config...</span>
+                    </div>
+                  ) : homeLayout.length === 0 ? (
+                    <div className="p-16 flex flex-col items-center justify-center gap-2 text-center border rounded-xl">
+                      <Layers className="w-8 h-8 text-slate-500 opacity-60" />
+                      <span className="text-xs font-bold text-slate-400">No layout sections found.</span>
+                      <button
+                        onClick={() => saveLayoutConfig(DEFAULT_HOME_LAYOUT)}
+                        className="mt-3 px-4 py-1.5 bg-indigo-600 hover:bg-indigo-500 text-white font-bold rounded-lg text-xs"
+                      >
+                        Initialize Default Layout
+                      </button>
+                    </div>
+                  ) : (
+                    <div className="flex flex-col gap-3">
+                      {homeLayout.map((section, idx) => {
+                        const isEdited = layoutEditingId === section.section_id;
+                        return (
+                          <div
+                            key={section.section_id}
+                            className={`p-4 rounded-xl border flex flex-col md:flex-row md:items-center justify-between gap-4 transition-all duration-300 ${
+                              isEdited
+                                ? "ring-2 ring-indigo-500 border-indigo-500"
+                                : !section.visible
+                                  ? isDark ? "bg-[#080d1a]/50 border-slate-800/40 opacity-60" : "bg-slate-100/50 border-slate-200 opacity-60"
+                                  : isDark ? "bg-[#070b14] border-[#1e2942]" : "bg-slate-50/50 border-slate-200"
+                            }`}
+                          >
+                            <div className="flex items-start gap-3">
+                              <div className={`p-2 rounded-xl text-xs font-black shrink-0 ${
+                                section.layout_type === "HERO"
+                                  ? "bg-rose-500/10 text-rose-400 border border-rose-500/20"
+                                  : section.layout_type === "TOP_10"
+                                    ? "bg-amber-500/10 text-amber-400 border border-amber-500/20"
+                                    : section.layout_type === "ACTORS"
+                                      ? "bg-teal-500/10 text-teal-400 border border-teal-500/20"
+                                      : "bg-indigo-500/10 text-indigo-400 border border-indigo-500/20"
+                              }`}>
+                                {section.layout_type}
+                              </div>
+
+                              <div className="flex flex-col text-left">
+                                <div className="flex items-center gap-1.5">
+                                  <span className={`text-xs font-extrabold ${isDark ? "text-slate-100" : "text-slate-800"}`}>
+                                    {section.title}
+                                  </span>
+                                  {!section.visible && (
+                                    <span className="text-[8px] font-black uppercase px-1.5 bg-rose-500/10 text-rose-400 rounded">
+                                      Hidden
+                                    </span>
+                                  )}
+                                </div>
+                                <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5 mt-1 text-[10px] text-slate-500 font-mono">
+                                  <span>ID: <strong className="text-slate-400">{section.section_id}</strong></span>
+                                  {section.layout_type === "DRAMA_RAIL" && section.data_source && (
+                                    <>
+                                      <span className="text-slate-700">•</span>
+                                      <span>Type: <strong className="text-slate-400">{section.data_source.media_type}</strong></span>
+                                      <span className="text-slate-700">•</span>
+                                      <span>Countries: <strong className="text-slate-400">[{section.data_source.countries?.join(", ") || "All"}]</strong></span>
+                                      <span className="text-slate-700">•</span>
+                                      <span>Sort: <strong className="text-slate-400">{section.data_source.sort_by}</strong></span>
+                                    </>
+                                  )}
+                                </div>
+                              </div>
+                            </div>
+
+                            {/* Position Ordering & Action Buttons */}
+                            <div className="flex items-center gap-2 shrink-0 md:self-center">
+                              {/* Move Controls */}
+                              <div className="flex items-center border rounded-lg overflow-hidden border-slate-700/20">
+                                <button
+                                  type="button"
+                                  disabled={idx === 0}
+                                  onClick={() => handleSectionOrderChange(idx, "up")}
+                                  className={`p-1.5 disabled:opacity-30 hover:text-indigo-500 transition-colors cursor-pointer ${
+                                    isDark ? "bg-slate-900 text-slate-400 hover:bg-slate-800" : "bg-white text-slate-500 hover:bg-slate-100"
+                                  }`}
+                                  title="Move Up"
+                                >
+                                  <ArrowUp className="w-3.5 h-3.5" />
+                                </button>
+                                <button
+                                  type="button"
+                                  disabled={idx === homeLayout.length - 1}
+                                  onClick={() => handleSectionOrderChange(idx, "down")}
+                                  className={`p-1.5 disabled:opacity-30 border-l border-slate-700/20 hover:text-indigo-500 transition-colors cursor-pointer ${
+                                    isDark ? "bg-slate-900 text-slate-400 hover:bg-slate-800" : "bg-white text-slate-500 hover:bg-slate-100"
+                                  }`}
+                                  title="Move Down"
+                                >
+                                  <ArrowDown className="w-3.5 h-3.5" />
+                                </button>
+                              </div>
+
+                              {/* Visibility Toggle */}
+                              <button
+                                type="button"
+                                onClick={() => handleToggleSectionVisibility(section.section_id)}
+                                className={`p-1.5 rounded-lg transition-colors cursor-pointer ${
+                                  !section.visible
+                                    ? "bg-rose-500/10 text-rose-400 hover:bg-rose-500/20"
+                                    : isDark
+                                      ? "bg-slate-900 text-slate-400 hover:bg-slate-800 hover:text-indigo-400"
+                                      : "bg-white text-slate-500 hover:bg-slate-100 hover:text-indigo-600"
+                                }`}
+                                title={section.visible ? "Hide on Client App" : "Show on Client App"}
+                              >
+                                <Eye className={`w-3.5 h-3.5 ${!section.visible ? "opacity-60" : ""}`} />
+                              </button>
+
+                              {/* Edit Section */}
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setLayoutSectionId(section.section_id);
+                                  setLayoutTitleInput(section.title || "");
+                                  setLayoutTypeInput(section.layout_type || "DRAMA_RAIL");
+                                  setLayoutVisibleInput(section.visible !== false);
+                                  if (section.data_source) {
+                                    setLayoutMediaTypeInput(section.data_source.media_type || "all");
+                                    setLayoutCountriesInput(section.data_source.countries?.join(", ") || "KR, JP");
+                                    setLayoutSortByInput(section.data_source.sort_by || "popularity");
+                                  } else {
+                                    setLayoutMediaTypeInput("all");
+                                    setLayoutCountriesInput("KR, JP");
+                                    setLayoutSortByInput("popularity");
+                                  }
+                                  setLayoutEditingId(section.section_id);
+                                }}
+                                className={`p-1.5 rounded-lg hover:text-indigo-500 transition-colors cursor-pointer ${
+                                  isDark ? "bg-slate-900 text-slate-400 hover:bg-slate-800" : "bg-white text-slate-500 hover:bg-slate-100"
+                                }`}
+                                title="Edit Configuration"
+                              >
+                                <Pencil className="w-3.5 h-3.5" />
+                              </button>
+
+                              {/* Delete Section */}
+                              <button
+                                type="button"
+                                onClick={() => handleDeleteSection(section.section_id)}
+                                className={`p-1.5 rounded-lg hover:text-rose-500 transition-colors cursor-pointer ${
+                                  isDark ? "bg-slate-900 text-slate-400 hover:bg-slate-800" : "bg-white text-slate-500 hover:bg-slate-100"
+                                }`}
+                                title="Delete Section"
+                              >
+                                <Trash2 className="w-3.5 h-3.5" />
+                              </button>
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
+
+                  {/* Dynamic JSON API Live Preview */}
+                  <div className={`mt-4 p-4 rounded-xl border flex flex-col gap-2.5 ${
+                    isDark ? "bg-[#070b14] border-[#1e2942]/60" : "bg-slate-50/50 border-slate-200"
+                  }`}>
+                    <div className="flex items-center justify-between">
+                      <h4 className={`text-[10px] font-black uppercase tracking-wider flex items-center gap-1.5 ${
+                        isDark ? "text-indigo-400" : "text-indigo-600"
+                      }`}>
+                        <Code className="w-3.5 h-3.5" />
+                        Live API JSON Response Payload Preview
+                      </h4>
+                      <span className="font-mono text-[9px] text-slate-500">GET /api/get-home-layout</span>
+                    </div>
+                    <pre className={`p-3 rounded-lg text-[10px] font-mono overflow-x-auto text-left leading-relaxed max-h-[180px] ${
+                      isDark ? "bg-[#05070e] text-indigo-300 border border-indigo-950/40" : "bg-white text-indigo-900 border border-slate-200"
+                    }`}>
+                      {JSON.stringify(homeLayout, null, 2)}
+                    </pre>
+                  </div>
+                </div>
+              </div>
+
             </div>
           </div>
         )}

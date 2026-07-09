@@ -301,21 +301,97 @@ app.post("/api/github/update-hero-config", verifyAdmin, async (req, res) => {
   for (const item of pinnedItems) {
     const dId = item.drama_id;
     if (dId) {
-      try {
-        const details = await fetchDramaDetails(dId, item.drama?.type || "tv");
-        const dramaYear = details.release_date ? parseInt(details.release_date.split("-")[0], 10) : 2024;
+      // If the client has sent a complete, custom drama object with a custom title, preserve it and bypass TMDB lookup completely!
+      if (item.drama && item.drama.title && !item.drama.title.startsWith("Drama (ID:")) {
+        let finalBackdrop = item.drama.backdrop_url || "";
+        if (finalBackdrop && finalBackdrop.includes("/t/p/w1280/")) {
+          finalBackdrop = finalBackdrop.replace("/t/p/w1280/", "/t/p/w500/");
+        } else if (!finalBackdrop.startsWith("http") && finalBackdrop) {
+          // If it is just a TMDB path (e.g. /abc123xyz.jpg)
+          finalBackdrop = `https://image.tmdb.org/t/p/w500${finalBackdrop}`;
+        }
+        
+        let synopsis = item.drama.synopsis || item.drama.overview || "";
+        if (synopsis && synopsis.length > 130) {
+          const truncated = synopsis.slice(0, 130);
+          const lastSpace = truncated.lastIndexOf(" ");
+          synopsis = (lastSpace > 100 ? truncated.slice(0, lastSpace) : truncated) + "...";
+        }
+
         updatedItems.push({
           drama_id: dId,
           position: item.position,
           drama: {
-            slug: `${details.type}-${dId}`,
-            title: details.title,
-            poster_url: details.poster_path,
-            backdrop_url: details.backdrop_path,
-            rating: Number(details.vote_average) || 0.0,
-            year: isNaN(dramaYear) ? 2024 : dramaYear,
-            type: details.type || "tv",
-            country: details.country || "KR"
+            slug: item.drama.slug || `${item.drama.type || "tv"}-${dId}`,
+            title: item.drama.title.trim(),
+            backdrop_url: finalBackdrop.trim(),
+            rating: Number(item.drama.rating) || 8.0,
+            year: Number(item.drama.year) || 2024,
+            type: item.drama.type || "tv",
+            country: item.drama.country || "KR",
+            synopsis: synopsis.trim()
+          }
+        });
+        continue;
+      }
+
+      // Warm up cache if we already have valid client data
+      if (item.drama && item.drama.title && !item.drama.title.startsWith("Drama (ID:")) {
+        const cacheKey = `${dId}_${item.drama.type || "tv"}`;
+        if (!tmdbDetailsCache[cacheKey]) {
+          tmdbDetailsCache[cacheKey] = {
+            id: String(dId),
+            title: item.drama.title,
+            type: item.drama.type || "tv",
+            poster_path: item.drama.backdrop_url,
+            backdrop_path: item.drama.backdrop_url,
+            release_date: item.drama.year ? `${item.drama.year}-01-01` : "2024-01-01",
+            overview: item.drama.synopsis || item.drama.overview || "",
+            genres: ["Drama"],
+            vote_average: item.drama.rating || 8.0,
+            country: item.drama.country || "KR"
+          };
+        }
+      }
+
+      try {
+        const details = await fetchDramaDetails(dId, item.drama?.type || "tv");
+        const dramaYear = details.release_date ? parseInt(details.release_date.split("-")[0], 10) : 2024;
+        
+        // If details returned a placeholder title, but the client already sent a valid title, prioritize the client title
+        const useClientData = item.drama && item.drama.title && !item.drama.title.startsWith("Drama (ID:") && details.title.startsWith("Drama (ID:");
+        
+        let finalBackdrop = useClientData ? item.drama.backdrop_url : details.backdrop_path;
+        if (finalBackdrop && finalBackdrop.includes("/t/p/w1280/")) {
+          finalBackdrop = finalBackdrop.replace("/t/p/w1280/", "/t/p/w500/");
+        } else if (finalBackdrop && !finalBackdrop.startsWith("http")) {
+          finalBackdrop = `https://image.tmdb.org/t/p/w500${finalBackdrop}`;
+        }
+
+        const fullOverview = details.overview || (item.drama && (item.drama.synopsis || item.drama.overview)) || "";
+        let synopsis = "";
+        if (fullOverview) {
+          if (fullOverview.length <= 130) {
+            synopsis = fullOverview;
+          } else {
+            const truncated = fullOverview.slice(0, 130);
+            const lastSpace = truncated.lastIndexOf(" ");
+            synopsis = (lastSpace > 100 ? truncated.slice(0, lastSpace) : truncated) + "...";
+          }
+        }
+
+        updatedItems.push({
+          drama_id: dId,
+          position: item.position,
+          drama: {
+            slug: `${useClientData ? item.drama.type : details.type}-${dId}`,
+            title: useClientData ? item.drama.title : details.title,
+            backdrop_url: finalBackdrop,
+            rating: useClientData ? (Number(item.drama.rating) || 8.0) : (Number(details.vote_average) || 0.0),
+            year: useClientData ? (item.drama.year || 2024) : (isNaN(dramaYear) ? 2024 : dramaYear),
+            type: useClientData ? item.drama.type : (details.type || "tv"),
+            country: useClientData ? item.drama.country : (details.country || "KR"),
+            synopsis: synopsis
           }
         });
       } catch (err) {
@@ -475,22 +551,61 @@ app.post("/api/github/sync-hero-metadata", verifyAdmin, async (req, res) => {
   for (const item of pinnedItems) {
     const dId = item.drama_id;
     if (dId) {
+      // Warm up cache if we already have valid data in the file
+      if (item.drama && item.drama.title && !item.drama.title.startsWith("Drama (ID:")) {
+        const cacheKey = `${dId}_${item.drama.type || "tv"}`;
+        if (!tmdbDetailsCache[cacheKey]) {
+          tmdbDetailsCache[cacheKey] = {
+            id: String(dId),
+            title: item.drama.title,
+            type: item.drama.type || "tv",
+            poster_path: item.drama.backdrop_url,
+            backdrop_path: item.drama.backdrop_url,
+            release_date: item.drama.year ? `${item.drama.year}-01-01` : "2024-01-01",
+            overview: item.drama.synopsis || item.drama.overview || "",
+            genres: ["Drama"],
+            vote_average: item.drama.rating || 8.0,
+            country: item.drama.country || "KR"
+          };
+        }
+      }
+
       try {
         const details = await fetchDramaDetails(dId, item.drama?.type || "tv");
         const dramaYear = details.release_date ? parseInt(details.release_date.split("-")[0], 10) : 2024;
         
+        // If details returned a placeholder title, but we already have a valid title, prioritize it
+        const useFileData = item.drama && item.drama.title && !item.drama.title.startsWith("Drama (ID:") && details.title.startsWith("Drama (ID:");
+        
+        let finalBackdrop = useFileData ? item.drama.backdrop_url : details.backdrop_path;
+        if (finalBackdrop && finalBackdrop.includes("/t/p/w1280/")) {
+          finalBackdrop = finalBackdrop.replace("/t/p/w1280/", "/t/p/w500/");
+        }
+
+        const fullOverview = details.overview || (item.drama && (item.drama.synopsis || item.drama.overview)) || "";
+        let synopsis = "";
+        if (fullOverview) {
+          if (fullOverview.length <= 130) {
+            synopsis = fullOverview;
+          } else {
+            const truncated = fullOverview.slice(0, 130);
+            const lastSpace = truncated.lastIndexOf(" ");
+            synopsis = (lastSpace > 100 ? truncated.slice(0, lastSpace) : truncated) + "...";
+          }
+        }
+
         updatedItems.push({
           drama_id: dId,
           position: item.position,
           drama: {
-            slug: `${details.type}-${dId}`,
-            title: details.title,
-            poster_url: details.poster_path,
-            backdrop_url: details.backdrop_path,
-            rating: Number(details.vote_average) || 0.0,
-            year: isNaN(dramaYear) ? 2024 : dramaYear,
-            type: details.type || "tv",
-            country: details.country || "KR"
+            slug: `${useFileData ? item.drama.type : details.type}-${dId}`,
+            title: useFileData ? item.drama.title : details.title,
+            backdrop_url: finalBackdrop,
+            rating: useFileData ? (Number(item.drama.rating) || 8.0) : (Number(details.vote_average) || 0.0),
+            year: useFileData ? (item.drama.year || 2024) : (isNaN(dramaYear) ? 2024 : dramaYear),
+            type: useFileData ? item.drama.type : (details.type || "tv"),
+            country: useFileData ? item.drama.country : (details.country || "KR"),
+            synopsis: synopsis
           }
         });
       } catch (err) {
@@ -668,15 +783,28 @@ app.get("/api/tmdb/search", async (req, res) => {
         const data = await response.json() as any;
         const results = (data.results || [])
           .filter((item: any) => item.media_type === "tv" || item.media_type === "movie")
-          .map((item: any) => ({
-            id: String(item.id),
-            title: item.name || item.title || "Untitled",
-            type: item.media_type,
-            poster_path: formatTmdbImage(item.poster_path, "poster") || "https://images.unsplash.com/photo-1594909122845-11baa439b7bf?q=80&w=600",
-            backdrop_path: formatTmdbImage(item.backdrop_path, "backdrop") || "https://images.unsplash.com/photo-1492691527719-9d1e07e534b4?q=80&w=1200",
-            release_date: item.first_air_date || item.release_date || "",
-            overview: item.overview || ""
-          }));
+          .map((item: any) => {
+            const resItem = {
+              id: String(item.id),
+              title: item.name || item.title || "Untitled",
+              type: item.media_type,
+              poster_path: formatTmdbImage(item.poster_path, "poster") || "https://images.unsplash.com/photo-1594909122845-11baa439b7bf?q=80&w=600",
+              backdrop_path: formatTmdbImage(item.backdrop_path, "backdrop") || "https://images.unsplash.com/photo-1492691527719-9d1e07e534b4?q=80&w=1200",
+              release_date: item.first_air_date || item.release_date || "",
+              overview: item.overview || ""
+            };
+            
+            // Cache details immediately to prevent resolving issues if user pins this
+            const cacheKey = `${resItem.id}_${resItem.type}`;
+            tmdbDetailsCache[cacheKey] = {
+              ...resItem,
+              genres: ["Drama"],
+              vote_average: 8.0,
+              country: "KR"
+            };
+            
+            return resItem;
+          });
         return res.json({ success: true, results, source: "tmdb" });
       } else {
         console.warn(`TMDB search API responded with status ${response.status}. Falling back to Gemini/Static.`);
@@ -717,6 +845,24 @@ app.get("/api/tmdb/search", async (req, res) => {
       const text = response.text;
       if (text) {
         const results = JSON.parse(text);
+        
+        // Cache Gemini results so they can be retrieved by /api/tmdb/details
+        results.forEach((resItem: any) => {
+          const cacheKey = `${String(resItem.id)}_${resItem.type || "tv"}`;
+          tmdbDetailsCache[cacheKey] = {
+            id: String(resItem.id),
+            title: resItem.title,
+            type: resItem.type || "tv",
+            poster_path: resItem.poster_path,
+            backdrop_path: resItem.backdrop_path,
+            release_date: resItem.release_date,
+            overview: resItem.overview,
+            genres: resItem.genres || ["Drama"],
+            vote_average: resItem.vote_average || 8.0,
+            country: "KR"
+          };
+        });
+        
         return res.json({ success: true, results, source: "gemini_synthesis" });
       }
     } catch (geminiErr: any) {
@@ -729,11 +875,15 @@ app.get("/api/tmdb/search", async (req, res) => {
   const q = query.toLowerCase();
   const matched = STATIC_POPULAR_DRAMAS.filter(
     item => item.title.toLowerCase().includes(q) || item.overview.toLowerCase().includes(q)
-  );
+  ).map(item => ({
+    ...item,
+    id: String(item.id)
+  }));
   
   if (matched.length === 0) {
-    matched.push({
-      id: "999" + Math.floor(Math.random() * 1000),
+    const generatedId = "999" + Math.floor(Math.random() * 1000);
+    const mockItem = {
+      id: generatedId,
       title: query,
       type: "tv",
       poster_path: "https://images.unsplash.com/photo-1594909122845-11baa439b7bf?q=80&w=600",
@@ -742,6 +892,23 @@ app.get("/api/tmdb/search", async (req, res) => {
       overview: `A thrilling drama exploring the themes of "${query}". Hand-curated and dynamically resolved by HanZone server.`,
       genres: ["Drama"],
       vote_average: 8.0
+    };
+    matched.push(mockItem);
+    
+    // Cache the fallback so pinning it immediately works
+    const cacheKey = `${generatedId}_tv`;
+    tmdbDetailsCache[cacheKey] = {
+      ...mockItem,
+      country: "KR"
+    };
+  } else {
+    // Cache the matched popular dramas too
+    matched.forEach(item => {
+      const cacheKey = `${item.id}_${item.type}`;
+      tmdbDetailsCache[cacheKey] = {
+        ...item,
+        country: "KR"
+      };
     });
   }
 
@@ -749,7 +916,8 @@ app.get("/api/tmdb/search", async (req, res) => {
 });
 
 // Helper function to fetch detailed drama/movie metadata with TMDB key or fallbacks
-async function fetchDramaDetails(id: string, typeHint: string = "tv"): Promise<any> {
+async function fetchDramaDetails(idInput: string | number, typeHint: string = "tv"): Promise<any> {
+  const id = String(idInput).trim();
   const cacheKey = `${id}_${typeHint}`;
   if (tmdbDetailsCache[cacheKey]) {
     return tmdbDetailsCache[cacheKey];
@@ -862,7 +1030,7 @@ async function fetchDramaDetails(id: string, typeHint: string = "tv"): Promise<a
   }
 
   // B. Static Curated Fallback
-  const staticFound = STATIC_POPULAR_DRAMAS.find(item => item.id === id);
+  const staticFound = STATIC_POPULAR_DRAMAS.find(item => String(item.id) === id);
   if (staticFound) {
     const enrichedStatic = { ...staticFound, country: (staticFound as any).country || "KR" };
     tmdbDetailsCache[cacheKey] = enrichedStatic;
@@ -968,6 +1136,796 @@ app.get("/api/tmdb/details", async (req, res) => {
     console.error(`Failed resolving details resolver for ID "${id}":`, err);
     return res.status(500).json({ success: false, error: err.message || "Failed resolving details." });
   }
+});
+
+// --- Drama Media Links Storage Helpers ---
+
+const loadDramaLinks = (): Record<string, { stream_url: string | null; download_url: string | null; title?: string }> => {
+  try {
+    const localPath = path.join(process.cwd(), "drama_links.json");
+    if (fs.existsSync(localPath)) {
+      const content = fs.readFileSync(localPath, "utf-8");
+      return JSON.parse(content);
+    }
+  } catch (err) {
+    console.error("Error reading drama_links.json:", err);
+  }
+  return {};
+};
+
+const saveDramaLinks = (links: Record<string, { stream_url: string | null; download_url: string | null; title?: string }>) => {
+  try {
+    const localPath = path.join(process.cwd(), "drama_links.json");
+    fs.writeFileSync(localPath, JSON.stringify(links, null, 2), "utf-8");
+  } catch (err) {
+    console.error("Error writing drama_links.json:", err);
+  }
+};
+
+// --- Home Screen Layout Dynamic Configuration Storage Helpers ---
+
+const DEFAULT_HOME_LAYOUT = [
+  {
+    "section_id": "hero_banner",
+    "layout_type": "HERO",
+    "title": "Featured Spotlight",
+    "visible": true
+  },
+  {
+    "section_id": "top_10_global",
+    "layout_type": "TOP_10",
+    "title": "Top 10 Hits",
+    "visible": true
+  },
+  {
+    "section_id": "kr_jp_mixed",
+    "layout_type": "DRAMA_RAIL",
+    "title": "Korean & Japanese Hits",
+    "visible": true,
+    "data_source": {
+      "media_type": "all",
+      "countries": ["KR", "JP"],
+      "sort_by": "popularity"
+    }
+  },
+  {
+    "section_id": "trending_actors",
+    "layout_type": "ACTORS",
+    "title": "Trending Stars",
+    "visible": true
+  }
+];
+
+const loadHomeLayout = (): any[] => {
+  try {
+    const localPath = path.join(process.cwd(), "home_layout.json");
+    if (fs.existsSync(localPath)) {
+      const content = fs.readFileSync(localPath, "utf-8");
+      return JSON.parse(content);
+    }
+  } catch (err) {
+    console.error("Error reading home_layout.json, using default:", err);
+  }
+  return DEFAULT_HOME_LAYOUT;
+};
+
+const saveHomeLayout = (layout: any[]): boolean => {
+  try {
+    const localPath = path.join(process.cwd(), "home_layout.json");
+    fs.writeFileSync(localPath, JSON.stringify(layout, null, 2), "utf-8");
+    return true;
+  } catch (err) {
+    console.error("Error writing home_layout.json:", err);
+    return false;
+  }
+};
+
+// --- Mobile Android / Public Proxy Endpoints ---
+
+// 1. Unified Search Endpoint
+app.get("/api/search", async (req, res) => {
+  const query = req.query.query as string;
+  if (!query || !query.trim()) {
+    return res.status(400).json({ success: false, error: "Missing required parameter: query" });
+  }
+
+  const tmdbKey = process.env.TMDB_API_KEY;
+
+  if (tmdbKey && tmdbKey !== "") {
+    try {
+      console.log(`[Proxy Search] Searching TMDB for: "${query}"`);
+      const tmdbUrl = `https://api.themoviedb.org/3/search/multi?api_key=${tmdbKey}&query=${encodeURIComponent(query)}&language=en-US`;
+      const response = await fetch(tmdbUrl);
+      if (response.ok) {
+        const data = await response.json() as any;
+        const results = (data.results || []).map((item: any) => {
+          if (item.media_type === "person") {
+            return {
+              id: String(item.id),
+              name: item.name || "Unknown",
+              type: "person",
+              profile_path: formatTmdbImage(item.profile_path, "poster"),
+              known_for_department: item.known_for_department || "",
+              known_for: (item.known_for || []).map((k: any) => ({
+                id: String(k.id),
+                title: k.title || k.name || "Untitled",
+                type: k.media_type || "tv",
+                poster_path: formatTmdbImage(k.poster_path, "poster"),
+                backdrop_path: formatTmdbImage(k.backdrop_path, "backdrop"),
+                release_date: k.release_date || k.first_air_date || "",
+                overview: k.overview || ""
+              }))
+            };
+          } else {
+            return {
+              id: String(item.id),
+              title: item.title || item.name || "Untitled",
+              type: item.media_type || "tv",
+              poster_path: formatTmdbImage(item.poster_path, "poster") || "https://images.unsplash.com/photo-1594909122845-11baa439b7bf?q=80&w=600",
+              backdrop_path: formatTmdbImage(item.backdrop_path, "backdrop") || "https://images.unsplash.com/photo-1492691527719-9d1e07e534b4?q=80&w=1200",
+              release_date: item.release_date || item.first_air_date || "",
+              overview: item.overview || "",
+              vote_average: item.vote_average || 0.0
+            };
+          }
+        });
+        return res.json({ success: true, results, source: "tmdb" });
+      }
+    } catch (err: any) {
+      console.error("[Proxy Search] TMDB search failed, falling back:", err);
+    }
+  }
+
+  // Fallback to Gemini AI if TMDB key is missing or failed
+  if (ai) {
+    try {
+      console.log(`[Proxy Search] Calling Gemini API fallback for query: "${query}"`);
+      const prompt = `The user is searching the HanZone K-Drama & Asian film database. Search TMDB index or generate realistic search results matching the query: "${query}".
+      Return an array of 4-6 highly realistic, beautiful Asian drama or movie matches, including some actors.
+      For actors ("type": "person"), include "id" (unique number string), "name", "profile_path" (high-quality Unsplash portrait), "known_for_department" (e.g., "Acting"), and a "known_for" array (with 2-3 of their typical movies/tv shows).
+      For tv shows/movies, include "id" (unique number string), "title", "type" ("tv" or "movie"), "poster_path" (Unsplash), "backdrop_path" (Unsplash), "release_date" (YYYY-MM-DD), "overview", and "vote_average" (number between 1.0 and 10.0).
+
+      Provide output strictly matching this JSON schema:
+      [
+        {
+          "id": "string",
+          "name": "string",
+          "title": "string",
+          "type": "person" | "tv" | "movie",
+          "profile_path": "string",
+          "known_for_department": "string",
+          "poster_path": "string",
+          "backdrop_path": "string",
+          "release_date": "string",
+          "overview": "string",
+          "vote_average": 8.5,
+          "known_for": [
+            {
+              "id": "string",
+              "title": "string",
+              "type": "tv" | "movie",
+              "poster_path": "string",
+              "backdrop_path": "string",
+              "release_date": "string",
+              "overview": "string"
+            }
+          ]
+        }
+      ]`;
+
+      const response = await ai.models.generateContent({
+        model: "gemini-3.5-flash",
+        contents: prompt,
+        config: { responseMimeType: "application/json" }
+      });
+      if (response.text) {
+        const results = JSON.parse(response.text);
+        return res.json({ success: true, results, source: "gemini_fallback" });
+      }
+    } catch (err: any) {
+      console.error("[Proxy Search] Gemini fallback search failed:", err);
+    }
+  }
+
+  // Simple static fallback
+  const q = query.toLowerCase();
+  const matched = STATIC_POPULAR_DRAMAS.filter(
+    item => item.title.toLowerCase().includes(q) || item.overview.toLowerCase().includes(q)
+  ).map(item => ({
+    ...item,
+    id: String(item.id)
+  }));
+  return res.json({ success: true, results: matched, source: "static_fallback" });
+});
+
+// 2. Drama/Movie Details & Similar Items (Enriched with stream and download URLs)
+app.get("/api/drama/details", async (req, res) => {
+  const id = req.query.id as string;
+  const type = (req.query.type as string) || "tv";
+
+  if (!id || !id.trim()) {
+    return res.status(400).json({ success: false, error: "Missing required parameter: id" });
+  }
+
+  let finalDetails: any = null;
+  const tmdbKey = process.env.TMDB_API_KEY;
+
+  if (tmdbKey && tmdbKey !== "" && !isNaN(Number(id))) {
+    try {
+      console.log(`[Proxy Details] Querying TMDB for ${type} ID: ${id}`);
+      const tmdbUrl = `https://api.themoviedb.org/3/${type}/${id}?api_key=${tmdbKey}&append_to_response=credits,similar&language=en-US`;
+      const response = await fetch(tmdbUrl);
+      if (response.ok) {
+        const item = await response.json() as any;
+        const origin_country = item.origin_country?.[0] || item.production_countries?.[0]?.iso_3166_1 || "KR";
+        
+        const mappedCast = (item.credits?.cast || []).slice(0, 10).map((c: any) => ({
+          id: String(c.id),
+          name: c.name,
+          character: c.character,
+          profile_path: formatTmdbImage(c.profile_path, "poster") || "https://images.unsplash.com/photo-1534528741775-53994a69daeb?q=80&w=400"
+        }));
+
+        const mappedSimilar = (item.similar?.results || []).slice(0, 6).map((s: any) => ({
+          id: String(s.id),
+          title: s.title || s.name || "Untitled",
+          type: type,
+          poster_path: formatTmdbImage(s.poster_path, "poster") || "https://images.unsplash.com/photo-1594909122845-11baa439b7bf?q=80&w=600",
+          backdrop_path: formatTmdbImage(s.backdrop_path, "backdrop") || "https://images.unsplash.com/photo-1492691527719-9d1e07e534b4?q=80&w=1200",
+          release_date: s.release_date || s.first_air_date || "",
+          overview: s.overview || "",
+          vote_average: s.vote_average || 0.0
+        }));
+
+        finalDetails = {
+          id: String(item.id),
+          title: item.name || item.title || "Untitled Show",
+          type: type,
+          poster_path: formatTmdbImage(item.poster_path, "poster") || "https://images.unsplash.com/photo-1594909122845-11baa439b7bf?q=80&w=600",
+          backdrop_path: formatTmdbImage(item.backdrop_path, "backdrop") || "https://images.unsplash.com/photo-1492691527719-9d1e07e534b4?q=80&w=1200",
+          release_date: item.first_air_date || item.release_date || "",
+          overview: item.overview || "",
+          genres: (item.genres || []).map((g: any) => g.name),
+          vote_average: item.vote_average || 0.0,
+          country: origin_country,
+          credits: { cast: mappedCast },
+          similar: mappedSimilar
+        };
+      }
+    } catch (err: any) {
+      console.error(`[Proxy Details] TMDB details query failed for ${type} ID ${id}:`, err);
+    }
+  }
+
+  // Fallback to Gemini if TMDB is failing or not configured
+  if (!finalDetails && ai) {
+    try {
+      console.log(`[Proxy Details] Calling Gemini fallback for ${type} ID: "${id}"`);
+      const prompt = `Synthesize incredibly detailed, rich, TMDB-style information for a ${type} with ID "${id}".
+      If this ID corresponds to a famous Asian film/TV show (e.g. Queen of Tears, Squid Game, Vincenzo, Sweet Home, My Demon), return its real actors (credits.cast), authentic overview, poster, backdrop, rating, and similar recommendations.
+      Otherwise, synthesize a highly beautiful, coherent K-Drama or movie with appropriate cast names and similar shows.
+
+      Provide output strictly matching this JSON schema:
+      {
+        "id": "${id}",
+        "title": "Exact or synthesized title",
+        "type": "${type}",
+        "poster_path": "https://images.unsplash.com/...",
+        "backdrop_path": "https://images.unsplash.com/...",
+        "release_date": "YYYY-MM-DD",
+        "overview": "Detailed show plot summary of 3-4 sentences.",
+        "genres": ["Drama", "Romance"],
+        "vote_average": 8.5,
+        "country": "KR",
+        "credits": {
+          "cast": [
+            {
+              "id": "cast_1",
+              "name": "Actor Name",
+              "character": "Character Name",
+              "profile_path": "https://images.unsplash.com/..."
+            }
+          ]
+        },
+        "similar": [
+          {
+            "id": "similar_1",
+            "title": "Similar Drama Title",
+            "type": "${type}",
+            "poster_path": "https://images.unsplash.com/...",
+            "backdrop_path": "https://images.unsplash.com/...",
+            "release_date": "YYYY-MM-DD",
+            "overview": "Brief description...",
+            "vote_average": 8.0
+          }
+        ]
+      }`;
+
+      const response = await ai.models.generateContent({
+        model: "gemini-3.5-flash",
+        contents: prompt,
+        config: { responseMimeType: "application/json" }
+      });
+      if (response.text) {
+        finalDetails = JSON.parse(response.text);
+      }
+    } catch (err: any) {
+      console.error("[Proxy Details] Gemini details fallback failed:", err);
+    }
+  }
+
+  // Last-resort mock fallback
+  if (!finalDetails) {
+    const staticFound = STATIC_POPULAR_DRAMAS.find(item => String(item.id) === id);
+    if (staticFound) {
+      finalDetails = {
+        ...staticFound,
+        id: String(staticFound.id),
+        type,
+        country: "KR",
+        credits: { cast: [] },
+        similar: []
+      };
+    } else {
+      finalDetails = {
+        id,
+        title: `Drama (ID: ${id})`,
+        type,
+        poster_path: "https://images.unsplash.com/photo-1594909122845-11baa439b7bf?q=80&w=600",
+        backdrop_path: "https://images.unsplash.com/photo-1492691527719-9d1e07e534b4?q=80&w=1200",
+        release_date: "2024-01-01",
+        overview: "A fascinating drama dynamically loaded from our server. Configure a TMDB API Key for complete cast and recommendations.",
+        genres: ["Drama"],
+        vote_average: 8.0,
+        country: "KR",
+        credits: { cast: [] },
+        similar: []
+      };
+    }
+  }
+
+  // Inject custom stream and download links from local drama_links database!
+  const links = loadDramaLinks();
+  const matchedLink = links[id];
+  finalDetails.stream_url = matchedLink?.stream_url || null;
+  finalDetails.download_url = matchedLink?.download_url || null;
+
+  return res.json({ success: true, data: finalDetails, source: "proxy" });
+});
+
+// --- Direct Streaming Link Specific Endpoints (Option A & B Support) ---
+
+// Option A: Get stream links for a single title (Supports both query param "?id={tmdb_id}" and path param "/{tmdb_id}")
+app.get("/api/get-stream-links", (req, res) => {
+  const id = req.query.id as string;
+  if (!id || !id.trim()) {
+    return res.status(400).json({ success: false, error: "Missing required query parameter: id" });
+  }
+  const links = loadDramaLinks();
+  const matched = links[id];
+  return res.json({
+    success: true,
+    id: id,
+    stream_url: matched?.stream_url || null,
+    download_url: matched?.download_url || null,
+    title: matched?.title || null
+  });
+});
+
+app.get("/api/get-stream-links/:id", (req, res) => {
+  const id = req.params.id;
+  if (!id || !id.trim()) {
+    return res.status(400).json({ success: false, error: "Missing required path parameter: id" });
+  }
+  const links = loadDramaLinks();
+  const matched = links[id];
+  return res.json({
+    success: true,
+    id: id,
+    stream_url: matched?.stream_url || null,
+    download_url: matched?.download_url || null,
+    title: matched?.title || null
+  });
+});
+
+// Option B: Get all active custom overrides/links in a single unified JSON for local caching
+app.get("/api/get-all-stream-links", (req, res) => {
+  const links = loadDramaLinks();
+  return res.json({
+    success: true,
+    links
+  });
+});
+
+// --- Dynamic Home Screen Layout Endpoints ---
+
+// Public endpoint for the Android client app to fetch the layout configuration
+app.get("/api/get-home-layout", (req, res) => {
+  const layout = loadHomeLayout();
+  return res.json({
+    success: true,
+    layout
+  });
+});
+
+// Admin endpoint to read the current layout configuration
+app.get("/api/admin/home-layout", verifyAdmin, (req, res) => {
+  const layout = loadHomeLayout();
+  return res.json({
+    success: true,
+    layout
+  });
+});
+
+// Admin endpoint to write/update the layout configuration
+app.post("/api/admin/home-layout", verifyAdmin, (req, res) => {
+  const { layout } = req.body;
+  if (!layout || !Array.isArray(layout)) {
+    return res.status(400).json({ success: false, error: "Invalid layout payload. Must be a JSON array of sections." });
+  }
+
+  const success = saveHomeLayout(layout);
+  if (success) {
+    return res.json({
+      success: true,
+      message: "Successfully saved Home Layout configuration!",
+      layout
+    });
+  } else {
+    return res.status(500).json({
+      success: false,
+      error: "Failed to persist Home Layout configuration to disk."
+    });
+  }
+});
+
+// 3. Discover & Filter Endpoint (With paginated categories and filters)
+app.get("/api/discover", async (req, res) => {
+  const type = (req.query.type as string) || "tv";
+  const genre = req.query.genre as string;
+  const keyword = req.query.keyword as string;
+  const page = parseInt(req.query.page as string, 10) || 1;
+
+  const tmdbKey = process.env.TMDB_API_KEY;
+
+  if (tmdbKey && tmdbKey !== "") {
+    try {
+      let tmdbUrl = `https://api.themoviedb.org/3/discover/${type}?api_key=${tmdbKey}&language=en-US&sort_by=popularity.desc&page=${page}`;
+      if (genre) {
+        tmdbUrl += `&with_genres=${genre}`;
+      }
+      if (keyword) {
+        tmdbUrl += `&with_keywords=${keyword}`;
+      }
+      console.log(`[Proxy Discover] Calling TMDB discover: "${tmdbUrl}"`);
+      const response = await fetch(tmdbUrl);
+      if (response.ok) {
+        const data = await response.json() as any;
+        const results = (data.results || []).map((s: any) => ({
+          id: String(s.id),
+          title: s.title || s.name || "Untitled",
+          type: type,
+          poster_path: formatTmdbImage(s.poster_path, "poster") || "https://images.unsplash.com/photo-1594909122845-11baa439b7bf?q=80&w=600",
+          backdrop_path: formatTmdbImage(s.backdrop_path, "backdrop") || "https://images.unsplash.com/photo-1492691527719-9d1e07e534b4?q=80&w=1200",
+          release_date: s.release_date || s.first_air_date || "",
+          overview: s.overview || "",
+          vote_average: s.vote_average || 0.0
+        }));
+
+        return res.json({
+          success: true,
+          page: data.page || page,
+          results,
+          total_pages: Math.min(data.total_pages || 1, 500), // TMDB caps page queries at 500
+          total_results: data.total_results || results.length
+        });
+      }
+    } catch (err: any) {
+      console.error("[Proxy Discover] TMDB discover failed, falling back:", err);
+    }
+  }
+
+  // Fallback to Gemini if TMDB is offline or key missing
+  if (ai) {
+    try {
+      console.log(`[Proxy Discover] Calling Gemini fallback discover page: ${page}, genre filters: ${genre || 'none'}`);
+      const prompt = `Generate a realistic page of TMDB-style Asian drama discover results for type "${type}".
+      Filters applied: genre IDs: "${genre || 'none'}", keyword IDs: "${keyword || 'none'}", page: ${page}.
+      Return a list of 6-8 matching shows/movies. Be highly creative with titles, years, ratings, and plots.
+      For poster_path and backdrop_path, use high-quality Unsplash image URLs.
+
+      Provide output strictly matching this JSON schema:
+      {
+        "page": ${page},
+        "total_pages": 10,
+        "total_results": 80,
+        "results": [
+          {
+            "id": "string",
+            "title": "string",
+            "type": "${type}",
+            "poster_path": "https://images.unsplash.com/...",
+            "backdrop_path": "https://images.unsplash.com/...",
+            "release_date": "YYYY-MM-DD",
+            "overview": "Detailed plot overview...",
+            "vote_average": 8.2
+          }
+        ]
+      }`;
+
+      const response = await ai.models.generateContent({
+        model: "gemini-3.5-flash",
+        contents: prompt,
+        config: { responseMimeType: "application/json" }
+      });
+      if (response.text) {
+        const parsed = JSON.parse(response.text);
+        return res.json({
+          success: true,
+          page: parsed.page || page,
+          results: parsed.results || [],
+          total_pages: parsed.total_pages || 1,
+          total_results: parsed.total_results || 0
+        });
+      }
+    } catch (err: any) {
+      console.error("[Proxy Discover] Gemini fallback discover failed:", err);
+    }
+  }
+
+  // Double static fallback
+  const results = STATIC_POPULAR_DRAMAS.map(item => ({
+    ...item,
+    id: String(item.id),
+    type
+  }));
+  return res.json({
+    success: true,
+    page: 1,
+    results,
+    total_pages: 1,
+    total_results: results.length
+  });
+});
+
+// 4. Person Profile & Credits
+app.get("/api/person/details", async (req, res) => {
+  const id = req.query.id as string;
+  if (!id || !id.trim()) {
+    return res.status(400).json({ success: false, error: "Missing required parameter: id" });
+  }
+
+  const tmdbKey = process.env.TMDB_API_KEY;
+
+  if (tmdbKey && tmdbKey !== "" && !isNaN(Number(id))) {
+    try {
+      console.log(`[Proxy Person] Querying TMDB for Person ID: ${id}`);
+      const tmdbUrl = `https://api.themoviedb.org/3/person/${id}?api_key=${tmdbKey}&append_to_response=combined_credits&language=en-US`;
+      const response = await fetch(tmdbUrl);
+      if (response.ok) {
+        const person = await response.json() as any;
+        const creditsCast = person.combined_credits?.cast || [];
+        
+        const movieCredits = creditsCast
+          .filter((c: any) => c.media_type === "movie")
+          .slice(0, 10)
+          .map((c: any) => ({
+            id: String(c.id),
+            title: c.title || "Untitled",
+            type: "movie",
+            character: c.character || "",
+            poster_path: formatTmdbImage(c.poster_path, "poster") || "https://images.unsplash.com/photo-1594909122845-11baa439b7bf?q=80&w=600",
+            backdrop_path: formatTmdbImage(c.backdrop_path, "backdrop") || "https://images.unsplash.com/photo-1492691527719-9d1e07e534b4?q=80&w=1200",
+            release_date: c.release_date || "",
+            overview: c.overview || "",
+            vote_average: c.vote_average || 0.0
+          }));
+
+        const tvCredits = creditsCast
+          .filter((c: any) => c.media_type === "tv")
+          .slice(0, 10)
+          .map((c: any) => ({
+            id: String(c.id),
+            title: c.name || "Untitled",
+            type: "tv",
+            character: c.character || "",
+            poster_path: formatTmdbImage(c.poster_path, "poster") || "https://images.unsplash.com/photo-1594909122845-11baa439b7bf?q=80&w=600",
+            backdrop_path: formatTmdbImage(c.backdrop_path, "backdrop") || "https://images.unsplash.com/photo-1492691527719-9d1e07e534b4?q=80&w=1200",
+            release_date: c.first_air_date || "",
+            overview: c.overview || "",
+            vote_average: c.vote_average || 0.0
+          }));
+
+        return res.json({
+          success: true,
+          id: String(person.id),
+          name: person.name,
+          biography: person.biography || "",
+          profile_path: formatTmdbImage(person.profile_path, "poster") || "https://images.unsplash.com/photo-1534528741775-53994a69daeb?q=80&w=400",
+          birthday: person.birthday || null,
+          place_of_birth: person.place_of_birth || null,
+          movie_credits: movieCredits,
+          tv_credits: tvCredits
+        });
+      }
+    } catch (err: any) {
+      console.error(`[Proxy Person] TMDB person details query failed:`, err);
+    }
+  }
+
+  // Fallback to Gemini if TMDB is offline or key missing
+  if (ai) {
+    try {
+      console.log(`[Proxy Person] Calling Gemini fallback for Person ID: "${id}"`);
+      const prompt = `Synthesize biography, birthday, place of birth, and movie/TV credits for a famous Asian actor or production staff member with TMDB ID: "${id}".
+      Generate a realistic, high-quality, professional response. Create a detailed biography and realistic, beautiful credits.
+
+      Provide output strictly matching this JSON schema:
+      {
+        "id": "${id}",
+        "name": "Actor/Person Name",
+        "biography": "Professional biographical profile of 3-4 sentences detailing awards and background.",
+        "profile_path": "https://images.unsplash.com/photo-1534528741775-53994a69daeb?q=80&w=400",
+        "birthday": "1994-02-22",
+        "place_of_birth": "Seoul, South Korea",
+        "movie_credits": [
+          {
+            "id": "m_1",
+            "title": "Famous Movie Title",
+            "type": "movie",
+            "character": "Main Role",
+            "poster_path": "https://images.unsplash.com/...",
+            "backdrop_path": "https://images.unsplash.com/...",
+            "release_date": "YYYY-MM-DD",
+            "overview": "Brief description...",
+            "vote_average": 8.0
+          }
+        ],
+        "tv_credits": [
+          {
+            "id": "tv_1",
+            "title": "Famous TV Series",
+            "type": "tv",
+            "character": "Leading Role",
+            "poster_path": "https://images.unsplash.com/...",
+            "backdrop_path": "https://images.unsplash.com/...",
+            "release_date": "YYYY-MM-DD",
+            "overview": "Brief description...",
+            "vote_average": 8.6
+          }
+        ]
+      }`;
+
+      const response = await ai.models.generateContent({
+        model: "gemini-3.5-flash",
+        contents: prompt,
+        config: { responseMimeType: "application/json" }
+      });
+      if (response.text) {
+        const result = JSON.parse(response.text);
+        return res.json({ success: true, ...result });
+      }
+    } catch (err: any) {
+      console.error("[Proxy Person] Gemini fallback person query failed:", err);
+    }
+  }
+
+  // Default hard fallback
+  return res.json({
+    success: true,
+    id,
+    name: "HanZone Star",
+    biography: "Full biography could not be loaded. Set a TMDB API Key for live credits and bios.",
+    profile_path: "https://images.unsplash.com/photo-1534528741775-53994a69daeb?q=80&w=400",
+    birthday: "1994-01-01",
+    place_of_birth: "Seoul, South Korea",
+    movie_credits: [],
+    tv_credits: []
+  });
+});
+
+// --- Administration / Custom Links Config Endpoints ---
+
+// Get all drama media links (VerifyAdmin)
+app.get("/api/admin/drama-links", verifyAdmin, (req, res) => {
+  const links = loadDramaLinks();
+  res.json({ success: true, links });
+});
+
+// Update or add a drama media link (VerifyAdmin, commits to GitHub if enabled, or saves locally)
+app.post("/api/admin/drama-links", verifyAdmin, async (req, res) => {
+  const { id, stream_url, download_url, title } = req.body;
+
+  if (!id) {
+    return res.status(400).json({ success: false, error: "Missing required parameter: id" });
+  }
+
+  const links = loadDramaLinks();
+  
+  if (stream_url === null && download_url === null) {
+    // Delete item if both URLs are cleared
+    delete links[id];
+  } else {
+    links[id] = {
+      stream_url: stream_url ? String(stream_url).trim() : null,
+      download_url: download_url ? String(download_url).trim() : null,
+      title: title ? String(title).trim() : links[id]?.title || `Drama (ID: ${id})`
+    };
+  }
+
+  // Save locally first
+  saveDramaLinks(links);
+
+  // Attempt to save to GitHub if configured to keep repo updated!
+  const owner = process.env.GITHUB_OWNER;
+  const repo = process.env.GITHUB_REPO;
+  const branch = process.env.GITHUB_BRANCH || "main";
+  const githubToken = process.env.GITHUB_TOKEN;
+  const filePath = "drama_links.json"; // Fixed file path in the repository for links
+
+  if (owner && repo && githubToken) {
+    const headers = {
+      "Accept": "application/vnd.github.v3+json",
+      "Authorization": `token ${githubToken}`,
+      "User-Agent": "Drama-Links-Admin-Dashboard",
+      "Content-Type": "application/json"
+    };
+
+    const getUrl = `https://api.github.com/repos/${owner}/${repo}/contents/${filePath}?ref=${branch}`;
+
+    try {
+      console.log(`[GitHub links Sync] Fetching SHA for ${filePath}...`);
+      const getResponse = await fetch(getUrl, { headers: { ...headers, "Content-Type": undefined } as any });
+      
+      let currentSha = "";
+      if (getResponse.ok) {
+        const fileData = await getResponse.json() as any;
+        currentSha = fileData.sha;
+      }
+
+      const updatedJsonString = JSON.stringify(links, null, 2);
+      const updatedBase64 = Buffer.from(updatedJsonString, "utf-8").toString("base64");
+
+      const putUrl = `https://api.github.com/repos/${owner}/${repo}/contents/${filePath}`;
+      const payload: any = {
+        message: `Admin UI: Update media streams config for drama ID ${id}`,
+        content: updatedBase64,
+        branch: branch
+      };
+
+      if (currentSha) {
+        payload.sha = currentSha;
+      }
+
+      console.log(`[GitHub links Sync] Committing update to ${putUrl}...`);
+      const putResponse = await fetch(putUrl, {
+        method: "PUT",
+        headers,
+        body: JSON.stringify(payload)
+      });
+
+      if (putResponse.ok) {
+        return res.json({
+          success: true,
+          message: `Successfully saved media links locally and committed to GitHub repo!`,
+          isLocalOnly: false,
+          links
+        });
+      } else {
+        const errText = await putResponse.text();
+        console.warn(`[GitHub links Sync] PUT failed with: ${errText}`);
+      }
+    } catch (err: any) {
+      console.error("[GitHub links Sync] Failed, using local fallback only:", err);
+    }
+  }
+
+  return res.json({
+    success: true,
+    message: "Successfully updated media stream links locally (GitHub storage skipped or failed).",
+    isLocalOnly: true,
+    links
+  });
 });
 
 // 1. GitHub: Fetch file content from custom repo

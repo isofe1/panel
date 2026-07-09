@@ -32,6 +32,17 @@ export interface LocalSnapshot {
 export interface PinnedItem {
   drama_id: string;
   position: number; // 1-indexed
+  drama?: {
+    slug: string;
+    title: string;
+    backdrop_url: string;
+    poster_url?: string;
+    rating: number;
+    year: number;
+    type: "tv" | "movie";
+    country: string;
+    synopsis?: string;
+  };
 }
 
 export interface HeroConfig {
