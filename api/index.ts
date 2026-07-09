@@ -182,7 +182,7 @@ app.get("/api/get-genres", async (req, res) => {
 
   try {
     // Construct Raw GitHub content URL to fetch the freshest commits bypassing any intermediary CDN proxy
-    const rawUrl = `https://raw.githubusercontent.com/${owner}/${repo}/${branch}/${filePath}`;
+    const rawUrl = `https://raw.githubusercontent.com/${owner}/${repo}/${branch}/${filePath}?v=${Date.now()}`;
     const headers: Record<string, string> = {
       "User-Agent": "Genres-Admin-Dashboard"
     };
@@ -254,7 +254,7 @@ app.get("/api/get-hero-config", async (req, res) => {
   }
 
   try {
-    const rawUrl = `https://raw.githubusercontent.com/${owner}/${repo}/${branch}/${filePath}`;
+    const rawUrl = `https://raw.githubusercontent.com/${owner}/${repo}/${branch}/${filePath}?v=${Date.now()}`;
     const headers: Record<string, string> = {
       "User-Agent": "Hero-Config-Admin-Dashboard"
     };
@@ -442,12 +442,18 @@ app.post("/api/github/update-hero-config", verifyAdmin, async (req, res) => {
     "Content-Type": "application/json"
   };
 
+  const getHeaders = {
+    "Accept": "application/vnd.github.v3+json",
+    "Authorization": `token ${githubToken}`,
+    "User-Agent": "Hero-Config-Admin-Dashboard"
+  };
+
   const getUrl = `https://api.github.com/repos/${owner}/${repo}/contents/${filePath}?ref=${branch}`;
 
   try {
     // Fetch current state of file to resolve SHA
     console.log(`GitHub Hero Config Update: Fetching current state of file to resolve SHA...`);
-    const getResponse = await fetch(getUrl, { headers: { ...headers, "Content-Type": undefined } as any });
+    const getResponse = await fetch(getUrl, { headers: getHeaders });
 
     let currentSha = "";
     if (getResponse.ok) {
@@ -1140,28 +1146,66 @@ app.get("/api/tmdb/details", async (req, res) => {
 
 // --- Drama Media Links Storage Helpers ---
 
-const loadDramaLinks = async (): Promise<Record<string, { stream_url: string | null; download_url: string | null; title?: string; seasons?: any }>> => {
+let isDramaLinksLoadedFromGithub = false;
+
+const loadDramaLinks = async (): Promise<Record<string, { stream_url: string | null; download_url: string | null; title?: string; seasons?: any; media_type?: string }>> => {
+  const localPath = path.join(process.cwd(), "drama_links.json");
+
+  // If we have already loaded from GitHub once, the local file is our absolute single-source of truth.
+  // Reading it directly avoids CDN propagation/cache delay issues on GitHub Raw files.
+  if (isDramaLinksLoadedFromGithub && fs.existsSync(localPath)) {
+    try {
+      const content = fs.readFileSync(localPath, "utf-8");
+      return JSON.parse(content);
+    } catch (err) {
+      console.error("Error reading cached local drama_links.json:", err);
+    }
+  }
+
   const owner = process.env.GITHUB_OWNER;
   const repo = process.env.GITHUB_REPO;
   const filePath = process.env.GITHUB_DRAMA_LINKS_FILE_PATH || "drama_links.json";
   const branch = process.env.GITHUB_BRANCH || "main";
   const githubToken = process.env.GITHUB_TOKEN;
 
-  const localPath = path.join(process.cwd(), "drama_links.json");
-
   if (owner && repo) {
     try {
-      const rawUrl = `https://raw.githubusercontent.com/${owner}/${repo}/${branch}/${filePath}`;
-      const headers: Record<string, string> = { "User-Agent": "Drama-Links-Admin" };
+      // Fetch via GitHub Contents API which bypasses Raw CDN caching completely
+      const getUrl = `https://api.github.com/repos/${owner}/${repo}/contents/${filePath}?ref=${branch}`;
+      const headers: Record<string, string> = {
+        "Accept": "application/vnd.github.v3+json",
+        "User-Agent": "Drama-Links-Admin"
+      };
       if (githubToken) {
         headers["Authorization"] = `token ${githubToken}`;
       }
-      const r = await fetch(rawUrl, { headers, cache: "no-store" });
+      
+      console.log(`[GitHub Sync] Initial fetch for drama_links.json via API`);
+      const r = await fetch(getUrl, { headers });
       if (r.ok) {
-        const content = await r.text();
-        const parsed = JSON.parse(content);
-        fs.writeFileSync(localPath, JSON.stringify(parsed, null, 2), "utf-8");
-        return parsed;
+        const fileData = await r.json() as any;
+        if (fileData.content) {
+          const content = Buffer.from(fileData.content, "base64").toString("utf-8");
+          const parsed = JSON.parse(content);
+          fs.writeFileSync(localPath, JSON.stringify(parsed, null, 2), "utf-8");
+          isDramaLinksLoadedFromGithub = true;
+          return parsed;
+        }
+      } else {
+        console.warn(`[GitHub Sync] Contents API failed with status ${r.status}. Trying Raw fallback...`);
+        const rawUrl = `https://raw.githubusercontent.com/${owner}/${repo}/${branch}/${filePath}?v=${Date.now()}`;
+        const rawHeaders: Record<string, string> = { "User-Agent": "Drama-Links-Admin" };
+        if (githubToken) {
+          rawHeaders["Authorization"] = `token ${githubToken}`;
+        }
+        const rRaw = await fetch(rawUrl, { headers: rawHeaders, cache: "no-store" });
+        if (rRaw.ok) {
+          const content = await rRaw.text();
+          const parsed = JSON.parse(content);
+          fs.writeFileSync(localPath, JSON.stringify(parsed, null, 2), "utf-8");
+          isDramaLinksLoadedFromGithub = true;
+          return parsed;
+        }
       }
     } catch (err) {
       console.error("Error fetching drama_links.json from GitHub:", err);
@@ -1171,20 +1215,22 @@ const loadDramaLinks = async (): Promise<Record<string, { stream_url: string | n
   try {
     if (fs.existsSync(localPath)) {
       const content = fs.readFileSync(localPath, "utf-8");
+      isDramaLinksLoadedFromGithub = true;
       return JSON.parse(content);
     }
   } catch (err) {
-    console.error("Error reading drama_links.json:", err);
+    console.error("Error reading drama_links.json fallback:", err);
   }
   return {};
 };
 
-const saveDramaLinks = async (links: Record<string, { stream_url: string | null; download_url: string | null; title?: string; seasons?: any }>): Promise<boolean> => {
+const saveDramaLinks = async (links: Record<string, { stream_url: string | null; download_url: string | null; title?: string; seasons?: any; media_type?: string }>): Promise<boolean> => {
   const localPath = path.join(process.cwd(), "drama_links.json");
   const jsonContent = JSON.stringify(links, null, 2);
   
   try {
     fs.writeFileSync(localPath, jsonContent, "utf-8");
+    isDramaLinksLoadedFromGithub = true; // Keep local source of truth flagged as loaded/valid
   } catch (err) {
     console.error("Error writing drama_links.json locally:", err);
   }
@@ -1205,7 +1251,13 @@ const saveDramaLinks = async (links: Record<string, { stream_url: string | null;
         "Content-Type": "application/json"
       };
 
-      const getResponse = await fetch(getUrl, { headers: { ...headers, "Content-Type": undefined } as any });
+      const getHeaders = {
+        "Accept": "application/vnd.github.v3+json",
+        "Authorization": `token ${githubToken}`,
+        "User-Agent": "Drama-Links-Admin"
+      };
+
+      const getResponse = await fetch(getUrl, { headers: getHeaders });
       let currentSha = "";
       if (getResponse.ok) {
         const fileData = await getResponse.json() as any;
@@ -1249,19 +1301,19 @@ const saveDramaLinks = async (links: Record<string, { stream_url: string | null;
 
 const DEFAULT_HOME_LAYOUT = [
   {
-    "section_id": "hero_banner",
+    "section_id": "1",
     "layout_type": "HERO",
     "title": "Featured Spotlight",
     "visible": true
   },
   {
-    "section_id": "top_10_global",
+    "section_id": "2",
     "layout_type": "TOP_10",
     "title": "Top 10 Hits",
     "visible": true
   },
   {
-    "section_id": "kr_jp_mixed",
+    "section_id": "3",
     "layout_type": "DRAMA_RAIL",
     "title": "Korean & Japanese Hits",
     "visible": true,
@@ -1272,7 +1324,7 @@ const DEFAULT_HOME_LAYOUT = [
     }
   },
   {
-    "section_id": "trending_actors",
+    "section_id": "4",
     "layout_type": "ACTORS",
     "title": "Trending Stars",
     "visible": true
@@ -1290,7 +1342,7 @@ const loadHomeLayout = async (): Promise<any[]> => {
 
   if (owner && repo) {
     try {
-      const rawUrl = `https://raw.githubusercontent.com/${owner}/${repo}/${branch}/${filePath}`;
+      const rawUrl = `https://raw.githubusercontent.com/${owner}/${repo}/${branch}/${filePath}?v=${Date.now()}`;
       const headers: Record<string, string> = { "User-Agent": "Home-Layout-Admin" };
       if (githubToken) {
         headers["Authorization"] = `token ${githubToken}`;
@@ -1344,7 +1396,13 @@ const saveHomeLayout = async (layout: any[]): Promise<boolean> => {
         "Content-Type": "application/json"
       };
 
-      const getResponse = await fetch(getUrl, { headers: { ...headers, "Content-Type": undefined } as any });
+      const getHeaders = {
+        "Accept": "application/vnd.github.v3+json",
+        "Authorization": `token ${githubToken}`,
+        "User-Agent": "Home-Layout-Admin"
+      };
+
+      const getResponse = await fetch(getUrl, { headers: getHeaders });
       let currentSha = "";
       if (getResponse.ok) {
         const fileData = await getResponse.json() as any;
@@ -2031,6 +2089,12 @@ app.get("/api/person/details", async (req, res) => {
 
 // --- Administration / Custom Links Config Endpoints ---
 
+// Public endpoint to get all custom drama media links (no auth required for app clients)
+app.get("/api/get-drama-links", async (req, res) => {
+  const links = await loadDramaLinks();
+  res.json({ success: true, links });
+});
+
 // Get all drama media links (VerifyAdmin)
 app.get("/api/admin/drama-links", verifyAdmin, async (req, res) => {
   const links = await loadDramaLinks();
@@ -2039,7 +2103,7 @@ app.get("/api/admin/drama-links", verifyAdmin, async (req, res) => {
 
 // Update or add a drama media link (VerifyAdmin, commits to GitHub if enabled, or saves locally)
 app.post("/api/admin/drama-links", verifyAdmin, async (req, res) => {
-  const { id, stream_url, download_url, title, seasons } = req.body;
+  const { id, stream_url, download_url, title, seasons, action, media_type } = req.body;
 
   if (!id) {
     return res.status(400).json({ success: false, error: "Missing required parameter: id" });
@@ -2047,89 +2111,28 @@ app.post("/api/admin/drama-links", verifyAdmin, async (req, res) => {
 
   const links = await loadDramaLinks();
   
-  if (stream_url === null && download_url === null && !seasons) {
-    // Delete item if everything is cleared
+  if (action === "delete" || (stream_url === null && download_url === null && !seasons)) {
+    // Delete item if everything is cleared or action is delete
     delete links[id];
   } else {
     links[id] = {
       stream_url: stream_url ? String(stream_url).trim() : null,
       download_url: download_url ? String(download_url).trim() : null,
       title: title ? String(title).trim() : links[id]?.title || `Drama (ID: ${id})`,
+      media_type: media_type ? String(media_type).trim() : (seasons ? "tv" : "movie"),
       seasons: seasons || (links[id] as any)?.seasons || undefined
     };
   }
 
-  // Save locally first
-  await saveDramaLinks(links);
-
-  // Attempt to save to GitHub if configured to keep repo updated!
-  const owner = process.env.GITHUB_OWNER;
-  const repo = process.env.GITHUB_REPO;
-  const branch = process.env.GITHUB_BRANCH || "main";
-  const githubToken = process.env.GITHUB_TOKEN;
-  const filePath = "drama_links.json"; // Fixed file path in the repository for links
-
-  if (owner && repo && githubToken) {
-    const headers = {
-      "Accept": "application/vnd.github.v3+json",
-      "Authorization": `token ${githubToken}`,
-      "User-Agent": "Drama-Links-Admin-Dashboard",
-      "Content-Type": "application/json"
-    };
-
-    const getUrl = `https://api.github.com/repos/${owner}/${repo}/contents/${filePath}?ref=${branch}`;
-
-    try {
-      console.log(`[GitHub links Sync] Fetching SHA for ${filePath}...`);
-      const getResponse = await fetch(getUrl, { headers: { ...headers, "Content-Type": undefined } as any });
-      
-      let currentSha = "";
-      if (getResponse.ok) {
-        const fileData = await getResponse.json() as any;
-        currentSha = fileData.sha;
-      }
-
-      const updatedJsonString = JSON.stringify(links, null, 2);
-      const updatedBase64 = Buffer.from(updatedJsonString, "utf-8").toString("base64");
-
-      const putUrl = `https://api.github.com/repos/${owner}/${repo}/contents/${filePath}`;
-      const payload: any = {
-        message: `Admin UI: Update media streams config for drama ID ${id}`,
-        content: updatedBase64,
-        branch: branch
-      };
-
-      if (currentSha) {
-        payload.sha = currentSha;
-      }
-
-      console.log(`[GitHub links Sync] Committing update to ${putUrl}...`);
-      const putResponse = await fetch(putUrl, {
-        method: "PUT",
-        headers,
-        body: JSON.stringify(payload)
-      });
-
-      if (putResponse.ok) {
-        return res.json({
-          success: true,
-          message: `Successfully saved media links locally and committed to GitHub repo!`,
-          isLocalOnly: false,
-          links
-        });
-      } else {
-        const errText = await putResponse.text();
-        console.warn(`[GitHub links Sync] PUT failed with: ${errText}`);
-      }
-    } catch (err: any) {
-      console.error("[GitHub links Sync] Failed, using local fallback only:", err);
-    }
-  }
+  // Save locally and sync with GitHub via the robust helper
+  const isSavedToGitHub = await saveDramaLinks(links);
 
   return res.json({
     success: true,
-    message: "Successfully updated media stream links locally (GitHub storage skipped or failed).",
-    isLocalOnly: true,
+    message: isSavedToGitHub
+      ? "Successfully updated and synced custom media links with GitHub!"
+      : "Updated custom media links locally, but GitHub sync failed.",
+    isLocalOnly: !isSavedToGitHub,
     links
   });
 });

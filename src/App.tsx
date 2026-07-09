@@ -61,6 +61,7 @@ import {
 } from "lucide-react";
 import { Genre, GitHubConfig, ChatMessage, LocalSnapshot, SystemStats, HeroConfig, PinnedItem } from "./types";
 import { kotlinTemplates } from "./codeTemplates";
+import { ApiDocumentation } from "./components/ApiDocumentation";
 
 const BACKDROP_PRESETS = [
   { name: "Sci-Fi / Cyberpunk", url: "https://images.unsplash.com/photo-1506318137071-a8e063b4bec0?auto=format&fit=crop&q=80&w=1200" },
@@ -75,19 +76,19 @@ const BACKDROP_PRESETS = [
 
 const DEFAULT_HOME_LAYOUT = [
   {
-    "section_id": "hero_banner",
+    "section_id": "1",
     "layout_type": "HERO",
     "title": "Featured Spotlight",
     "visible": true
   },
   {
-    "section_id": "top_10_global",
+    "section_id": "2",
     "layout_type": "TOP_10",
     "title": "Top 10 Hits",
     "visible": true
   },
   {
-    "section_id": "kr_jp_mixed",
+    "section_id": "3",
     "layout_type": "DRAMA_RAIL",
     "title": "Korean & Japanese Hits",
     "visible": true,
@@ -98,7 +99,7 @@ const DEFAULT_HOME_LAYOUT = [
     }
   },
   {
-    "section_id": "trending_actors",
+    "section_id": "4",
     "layout_type": "ACTORS",
     "title": "Trending Stars",
     "visible": true
@@ -572,8 +573,9 @@ export default function App() {
         body: JSON.stringify({
           id: linkDramaId.trim(),
           title: linkTitle.trim() || undefined,
-          stream_url: linkStreamUrl.trim() || null,
-          download_url: linkDownloadUrl.trim() || null,
+          stream_url: linkMediaType === "movie" ? (linkStreamUrl.trim() || null) : null,
+          download_url: linkMediaType === "movie" ? (linkDownloadUrl.trim() || null) : null,
+          media_type: linkMediaType,
           seasons: linkMediaType === "tv" ? customSeasons : null
         })
       });
@@ -648,9 +650,6 @@ export default function App() {
 
   // Delete a customized link
   const handleDeleteDramaLink = async (id: string) => {
-    if (!window.confirm(`Are you sure you want to remove all custom links for Drama ID: ${id}?`)) {
-      return;
-    }
     setLinksSaving(true);
     try {
       const response = await fetch("/api/admin/drama-links", {
@@ -662,7 +661,8 @@ export default function App() {
         body: JSON.stringify({
           id: id,
           stream_url: null,
-          download_url: null
+          download_url: null,
+          action: "delete"
         })
       });
       const data = await response.json();
@@ -766,10 +766,6 @@ export default function App() {
 
   // Delete section from configuration
   const handleDeleteSection = async (sectionId: string) => {
-    if (!window.confirm(`Are you sure you want to remove the section: "${sectionId}"?`)) {
-      return;
-    }
-
     const updated = homeLayout.filter((sec) => sec.section_id !== sectionId);
     setHomeLayout(updated);
     await saveLayoutConfig(updated);
@@ -1231,15 +1227,13 @@ export default function App() {
   };
 
   const restoreLocalSnapshot = (snap: LocalSnapshot) => {
-    if (window.confirm(`Are you sure you want to restore snapshot '${snap.name}'? This will override your active dashboard state.`)) {
-      setGenres(snap.data);
-      if (snap.data.length > 0) {
-        selectGenreForEditing(snap.data[0]);
-      } else {
-        startAddMode();
-      }
-      addLog(`Restored dashboard state to snapshot '${snap.name}'. Click 'Go to Production CDN' or select category to commit back to Git repository.`, "info");
+    setGenres(snap.data);
+    if (snap.data.length > 0) {
+      selectGenreForEditing(snap.data[0]);
+    } else {
+      startAddMode();
     }
+    addLog(`Restored dashboard state to snapshot '${snap.name}'. Click 'Go to Production CDN' or select category to commit back to Git repository.`, "info");
   };
 
   const deleteLocalSnapshot = (id: string, name: string) => {
@@ -1297,6 +1291,27 @@ export default function App() {
       loadHeroConfig();
     }
   }, [isAuthenticated]);
+
+  // Auto-sync freshest GitHub data when window/tab receives focus
+  useEffect(() => {
+    const handleWindowFocus = () => {
+      if (isAuthenticated) {
+        addLog("Tab focus detected: Auto-synchronizing freshest data from GitHub...", "info");
+        loadData();
+        loadHeroConfig();
+        if (activeTab === "streams") {
+          fetchDramaLinks();
+        } else if (activeTab === "layout") {
+          fetchHomeLayout();
+        }
+      }
+    };
+
+    window.addEventListener("focus", handleWindowFocus);
+    return () => {
+      window.removeEventListener("focus", handleWindowFocus);
+    };
+  }, [isAuthenticated, activeTab]);
 
   // Sync quick edit bg URL with selection
   useEffect(() => {
@@ -2175,6 +2190,9 @@ export default function App() {
                 </div>
 
               </div>
+
+              {/* API Documentation Section */}
+              <ApiDocumentation isDark={isDark} adminPassword={adminPassword} />
             </div>
           )}
 
@@ -2232,6 +2250,23 @@ export default function App() {
                       </button>
                     )}
                   </div>
+
+                  <button
+                    onClick={() => {
+                      addLog("Manual Sync triggered: pulling freshest categories from GitHub...", "info");
+                      loadData();
+                    }}
+                    disabled={loading}
+                    className={`h-9 px-3.5 rounded-xl border flex items-center gap-1.5 text-xs font-bold transition-all duration-300 active:scale-[0.98] ${
+                      isDark 
+                        ? "bg-[#11192e] border-[#1e2942] hover:bg-[#1c294a] text-slate-200 disabled:opacity-50" 
+                        : "bg-white border-slate-200 hover:bg-slate-50 text-slate-700 shadow-sm disabled:opacity-50"
+                    }`}
+                    title="Force refresh categories list from GitHub"
+                  >
+                    <RefreshCw className={`w-3.5 h-3.5 ${loading ? "animate-spin text-indigo-500" : ""}`} />
+                    <span>Sync from GitHub</span>
+                  </button>
 
                   <button
                     id="btn-add-genre-grid"
@@ -2697,16 +2732,20 @@ export default function App() {
                 
                 <div className="flex items-center gap-2">
                   <button
-                    onClick={() => loadHeroConfig()}
+                    onClick={() => {
+                      addLog("Manual Sync triggered: pulling freshest Hero configuration from GitHub...", "info");
+                      loadHeroConfig();
+                    }}
                     disabled={heroLoading}
                     className={`h-9 px-4 rounded-xl text-xs font-bold transition-all duration-300 flex items-center gap-1.5 border ${
                       isDark 
-                        ? "bg-[#11192e] border-[#1e2942] hover:bg-[#1c294a] text-slate-200" 
-                        : "bg-white border-slate-200 hover:bg-slate-50 text-slate-700 shadow-sm"
+                        ? "bg-[#11192e] border-[#1e2942] hover:bg-[#1c294a] text-slate-200 disabled:opacity-50" 
+                        : "bg-white border-slate-200 hover:bg-slate-50 text-slate-700 shadow-sm disabled:opacity-50"
                     }`}
+                    title="Force refresh hero banner configuration from GitHub"
                   >
-                    <RefreshCw className={`w-3.5 h-3.5 ${heroLoading ? "animate-spin" : ""}`} />
-                    Refresh
+                    <RefreshCw className={`w-3.5 h-3.5 ${heroLoading ? "animate-spin text-indigo-500" : ""}`} />
+                    <span>Sync from GitHub</span>
                   </button>
                   <button
                     onClick={() => saveHeroConfig()}
@@ -3815,9 +3854,29 @@ export default function App() {
             <div className={`rounded-2xl p-6 border transition-colors duration-300 ${
               isDark ? "bg-[#0c1224] border-[#1e2942]" : "bg-white border-slate-200"
             }`}>
-              <div className="flex items-center gap-2 text-indigo-500 font-black tracking-tight text-lg mb-2">
-                <Video className="w-6 h-6 animate-pulse text-indigo-500" />
-                Custom Media Streams & Download Injector
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-2">
+                <div className="flex items-center gap-2 text-indigo-500 font-black tracking-tight text-lg">
+                  <Video className="w-6 h-6 animate-pulse text-indigo-500" />
+                  Custom Media Streams & Download Injector
+                </div>
+                
+                <button
+                  type="button"
+                  onClick={() => {
+                    addLog("Manual Sync triggered: pulling freshest streaming links from server...", "info");
+                    fetchDramaLinks();
+                  }}
+                  disabled={linksLoading}
+                  className={`h-9 px-3.5 rounded-xl border flex items-center gap-1.5 text-xs font-bold transition-all duration-300 active:scale-[0.98] ${
+                    isDark 
+                      ? "bg-[#11192e] border-[#1e2942] hover:bg-[#1c294a] text-slate-200 disabled:opacity-50" 
+                      : "bg-white border-slate-200 hover:bg-slate-50 text-slate-700 shadow-sm disabled:opacity-50"
+                  }`}
+                  title="Force refresh custom streaming links from server"
+                >
+                  <RefreshCw className={`w-3.5 h-3.5 ${linksLoading ? "animate-spin text-indigo-500" : ""}`} />
+                  <span>Sync from Server</span>
+                </button>
               </div>
               <p className={`text-xs leading-relaxed max-w-2xl mb-6 transition-colors duration-300 ${isDark ? "text-slate-400" : "text-slate-500"}`}>
                 Inject custom `.mp4`, `.m3u8`, or other streaming links directly into details queries. 
@@ -3838,46 +3897,69 @@ export default function App() {
               <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
                 {/* Form column */}
                 <form onSubmit={handleSaveDramaLink} className="lg:col-span-5 flex flex-col gap-4">
-                  <h3 className={`text-xs font-black uppercase tracking-wider ${isDark ? "text-slate-300" : "text-slate-700"}`}>
-                    {linkEditingId ? "Edit Custom Links" : "Inject New Drama Links"}
-                  </h3>
+                  <div className="flex items-center justify-between">
+                    <h3 className={`text-xs font-black uppercase tracking-wider ${isDark ? "text-slate-300" : "text-slate-700"}`}>
+                      {linkEditingId ? "Edit Custom Links" : "Inject Media Stream"}
+                    </h3>
+                    {linkEditingId && (
+                      <span className="text-[10px] bg-indigo-500/10 text-indigo-400 font-bold px-2 py-0.5 rounded-full">
+                        Editing ID: {linkEditingId}
+                      </span>
+                    )}
+                  </div>
 
-                  <div className="flex flex-col gap-1.5">
-                    <label className="text-[11px] font-bold text-slate-400">Media Injection Type</label>
-                    <div className="grid grid-cols-2 gap-2 p-1 rounded-xl bg-slate-500/5 border border-slate-700/10">
+                  {/* Tabs Selector */}
+                  <div className="flex flex-col gap-1">
+                    <label className="text-[11px] font-bold text-slate-400 flex justify-between">
+                      <span>Stream Category</span>
+                      <span>{linkMediaType === "movie" ? "Movies" : "Series"}</span>
+                    </label>
+                    <div className="grid grid-cols-2 gap-2 p-1.5 rounded-xl bg-slate-500/5 border border-slate-700/10">
                       <button
                         type="button"
-                        onClick={() => setLinkMediaType("movie")}
-                        className={`py-2 px-3 rounded-lg text-xs font-bold transition-all flex items-center justify-center gap-1.5 ${
+                        onClick={() => {
+                          setLinkMediaType("movie");
+                          // Clear series specific states if we switch, or keep them
+                        }}
+                        className={`py-2.5 px-3 rounded-lg text-xs font-bold transition-all flex items-center justify-center gap-2 ${
                           linkMediaType === "movie"
-                            ? (isDark ? "bg-indigo-600 text-white shadow" : "bg-white text-indigo-600 shadow-sm border border-slate-200")
-                            : "text-slate-400 hover:text-slate-300"
+                            ? (isDark ? "bg-indigo-600 text-white shadow-md" : "bg-white text-indigo-600 shadow border border-slate-200")
+                            : "text-slate-400 hover:text-slate-200 hover:bg-slate-500/5"
                         }`}
                       >
-                        <Film className="w-3.5 h-3.5" />
-                        Movie / Single
+                        <Film className="w-4 h-4" />
+                        <div className="flex flex-col items-start leading-none">
+                          <span className="text-[11px] font-black">Movies</span>
+                        </div>
                       </button>
                       <button
                         type="button"
-                        onClick={() => setLinkMediaType("tv")}
-                        className={`py-2 px-3 rounded-lg text-xs font-bold transition-all flex items-center justify-center gap-1.5 ${
+                        onClick={() => {
+                          setLinkMediaType("tv");
+                        }}
+                        className={`py-2.5 px-3 rounded-lg text-xs font-bold transition-all flex items-center justify-center gap-2 ${
                           linkMediaType === "tv"
-                            ? (isDark ? "bg-indigo-600 text-white shadow" : "bg-white text-indigo-600 shadow-sm border border-slate-200")
-                            : "text-slate-400 hover:text-slate-300"
+                            ? (isDark ? "bg-indigo-600 text-white shadow-md" : "bg-white text-indigo-600 shadow border border-slate-200")
+                            : "text-slate-400 hover:text-slate-200 hover:bg-slate-500/5"
                         }`}
                       >
-                        <Tv className="w-3.5 h-3.5" />
-                        TV Show / Episodes
+                        <Tv className="w-4 h-4" />
+                        <div className="flex flex-col items-start leading-none">
+                          <span className="text-[11px] font-black">TV Series</span>
+                        </div>
                       </button>
                     </div>
                   </div>
 
+                  {/* TMDB ID Input */}
                   <div className="flex flex-col gap-1">
-                    <label className="text-[11px] font-bold text-slate-400">TMDB ID *</label>
+                    <label className="text-[11px] font-bold text-slate-400">
+                      <span>TMDB ID *</span>
+                    </label>
                     <input
                       type="text"
                       required
-                      placeholder="e.g. 123456"
+                      placeholder={linkMediaType === "movie" ? "e.g. 1011985 (Movie TMDB ID)" : "e.g. 94997 (TV Show TMDB ID)"}
                       disabled={!!linkEditingId}
                       value={linkDramaId}
                       onChange={(e) => setLinkDramaId(e.target.value)}
@@ -3887,11 +3969,18 @@ export default function App() {
                           : "bg-slate-50 border-slate-200 text-slate-800 focus:border-indigo-500"
                       }`}
                     />
-                    <span className="text-[10px] text-slate-500 mt-0.5">The exact TMDB movie or TV series ID.</span>
+                    <span className="text-[10px] text-slate-500">
+                      {linkMediaType === "movie" 
+                        ? "Enter the exact TMDB ID for the Movie." 
+                        : "Enter the exact TMDB ID for the TV series."}
+                    </span>
                   </div>
 
+                  {/* Custom Title Input */}
                   <div className="flex flex-col gap-1">
-                    <label className="text-[11px] font-bold text-slate-400">Drama Title / Friendly Name</label>
+                    <label className="text-[11px] font-bold text-slate-400">
+                      <span>Friendly Title / English Name</span>
+                    </label>
                     <input
                       type="text"
                       placeholder="e.g. Queen of Tears"
@@ -3903,104 +3992,120 @@ export default function App() {
                           : "bg-slate-50 border-slate-200 text-slate-800 focus:border-indigo-500"
                       }`}
                     />
-                    <span className="text-[10px] text-slate-500 mt-0.5">Helps identify the drama in this list.</span>
+                    <span className="text-[10px] text-slate-500">Helps easily search and identify the injected item in your dashboard list.</span>
                   </div>
 
-                  <div className="flex flex-col gap-1">
-                    <label className="text-[11px] font-bold text-slate-400">
-                      {linkMediaType === "tv" ? "Default/Fallback Stream URL (stream_url)" : "Direct Stream URL (stream_url)"}
-                    </label>
-                    <input
-                      type="url"
-                      placeholder="https://example.com/stream.m3u8"
-                      value={linkStreamUrl}
-                      onChange={(e) => setLinkStreamUrl(e.target.value)}
-                      className={`h-10 px-3 rounded-xl text-xs font-medium border focus:outline-none transition-colors ${
-                        isDark 
-                          ? "bg-[#11192e] border-slate-700/50 text-slate-100 focus:border-indigo-500" 
-                          : "bg-slate-50 border-slate-200 text-slate-800 focus:border-indigo-500"
-                      }`}
-                    />
-                    <span className="text-[10px] text-slate-500 mt-0.5">Direct stream link (HLS/m3u8, MP4, etc.) for video player.</span>
-                  </div>
-
-                  <div className="flex flex-col gap-1">
-                    <label className="text-[11px] font-bold text-slate-400">
-                      {linkMediaType === "tv" ? "Default/Fallback Download URL (download_url)" : "Direct Download URL (download_url)"}
-                    </label>
-                    <input
-                      type="url"
-                      placeholder="https://example.com/download.mp4"
-                      value={linkDownloadUrl}
-                      onChange={(e) => setLinkDownloadUrl(e.target.value)}
-                      className={`h-10 px-3 rounded-xl text-xs font-medium border focus:outline-none transition-colors ${
-                        isDark 
-                          ? "bg-[#11192e] border-slate-700/50 text-slate-100 focus:border-indigo-500" 
-                          : "bg-slate-50 border-slate-200 text-slate-800 focus:border-indigo-500"
-                      }`}
-                    />
-                    <span className="text-[10px] text-slate-500 mt-0.5">Allows direct download options inside the mobile player.</span>
-                  </div>
-
-                  {/* Multi-Episode Injection Section for TV Series */}
-                  {linkMediaType === "tv" && (
-                    <div className={`p-4 rounded-xl border mt-2 flex flex-col gap-3 ${
-                      isDark ? "bg-[#090f1e]/80 border-slate-700/40" : "bg-indigo-50/20 border-indigo-100"
-                    }`}>
-                      <div className="flex items-center gap-1.5 text-xs font-black text-indigo-500">
-                        <PlusCircle className="w-4 h-4 text-indigo-500" />
-                        <span>Add Season / Episode Specific Links</span>
+                  {/* CONDITIONAL LAYOUT BASED ON TAB */}
+                  {linkMediaType === "movie" ? (
+                    /* MOVIES FIELDS */
+                    <div className="flex flex-col gap-4 p-4 rounded-2xl bg-indigo-500/5 border border-indigo-500/10">
+                      <div className="flex items-center gap-1.5 text-xs font-bold text-indigo-400">
+                        <Film className="w-4 h-4 text-indigo-500" />
+                        <span>Movie Stream Info</span>
                       </div>
 
-                      <div className="grid grid-cols-2 gap-2">
+                      <div className="flex flex-col gap-1">
+                        <label className="text-[11px] font-bold text-slate-400">
+                          <span>Direct Stream URL (M3U8 / MP4)</span>
+                        </label>
+                        <input
+                          type="url"
+                          required={linkMediaType === "movie"}
+                          placeholder="https://example.com/movie_stream.m3u8"
+                          value={linkStreamUrl}
+                          onChange={(e) => setLinkStreamUrl(e.target.value)}
+                          className={`h-10 px-3 rounded-xl text-xs font-medium border focus:outline-none transition-colors ${
+                            isDark 
+                              ? "bg-[#11192e] border-slate-700/50 text-slate-100 focus:border-indigo-500" 
+                              : "bg-slate-50 border-slate-200 text-slate-800 focus:border-indigo-500"
+                          }`}
+                        />
+                        <span className="text-[10px] text-slate-500">Supported formats: Direct HLS (.m3u8), MP4 or WebM stream link.</span>
+                      </div>
+
+                      <div className="flex flex-col gap-1">
+                        <label className="text-[11px] font-bold text-slate-400">
+                          <span>Direct Download URL</span>
+                        </label>
+                        <input
+                          type="url"
+                          placeholder="https://example.com/movie_download.mp4"
+                          value={linkDownloadUrl}
+                          onChange={(e) => setLinkDownloadUrl(e.target.value)}
+                          className={`h-10 px-3 rounded-xl text-xs font-medium border focus:outline-none transition-colors ${
+                            isDark 
+                              ? "bg-[#11192e] border-slate-700/50 text-slate-100 focus:border-indigo-500" 
+                              : "bg-slate-50 border-slate-200 text-slate-800 focus:border-indigo-500"
+                          }`}
+                        />
+                        <span className="text-[10px] text-slate-500">Provides download capabilities inside the mobile video player.</span>
+                      </div>
+                    </div>
+                  ) : (
+                    /* TV SERIES / EPISODES FIELDS */
+                    <div className="flex flex-col gap-4 p-4 rounded-2xl bg-indigo-500/5 border border-indigo-500/10">
+                      <div className="flex items-center gap-1.5 text-xs font-bold text-indigo-400">
+                        <Tv className="w-4 h-4 text-indigo-400" />
+                        <span>Episode Injector</span>
+                      </div>
+
+                      <div className="grid grid-cols-2 gap-3">
                         <div className="flex flex-col gap-1">
-                          <label className="text-[10px] font-bold text-slate-400">Season #</label>
+                          <label className="text-[10px] font-bold text-slate-400">
+                            <span>Season #</span>
+                          </label>
                           <input
                             type="number"
                             min="1"
                             value={tempSeason}
                             onChange={(e) => setTempSeason(e.target.value)}
-                            className={`h-8 px-2 rounded-lg text-xs font-semibold focus:outline-none transition-colors ${
-                              isDark ? "bg-[#11192e] border border-slate-700/40 text-white" : "bg-white border border-slate-200 text-slate-800"
+                            className={`h-9 px-2.5 rounded-xl text-xs font-semibold focus:outline-none transition-colors ${
+                              isDark ? "bg-[#11192e] border border-slate-700/50 text-white focus:border-indigo-500" : "bg-white border border-slate-200 text-slate-800 focus:border-indigo-500"
                             }`}
                           />
                         </div>
                         <div className="flex flex-col gap-1">
-                          <label className="text-[10px] font-bold text-slate-400">Episode #</label>
+                          <label className="text-[10px] font-bold text-slate-400">
+                            <span>Episode #</span>
+                          </label>
                           <input
                             type="number"
                             min="1"
                             value={tempEpisode}
                             onChange={(e) => setTempEpisode(e.target.value)}
-                            className={`h-8 px-2 rounded-lg text-xs font-semibold focus:outline-none transition-colors ${
-                              isDark ? "bg-[#11192e] border border-slate-700/40 text-white" : "bg-white border border-slate-200 text-slate-800"
+                            className={`h-9 px-2.5 rounded-xl text-xs font-semibold focus:outline-none transition-colors ${
+                              isDark ? "bg-[#11192e] border border-slate-700/50 text-white focus:border-indigo-500" : "bg-white border border-slate-200 text-slate-800 focus:border-indigo-500"
                             }`}
                           />
                         </div>
                       </div>
 
                       <div className="flex flex-col gap-1">
-                        <label className="text-[10px] font-bold text-slate-400">Episode Stream URL</label>
+                        <label className="text-[10px] font-bold text-slate-400">
+                          <span>Episode Stream URL (M3U8 / MP4)</span>
+                        </label>
                         <input
                           type="url"
-                          placeholder="https://example.com/s1e1_stream.mp4"
+                          placeholder="https://example.com/ep1_stream.mp4"
                           value={tempEpisodeStreamUrl}
                           onChange={(e) => setTempEpisodeStreamUrl(e.target.value)}
-                          className={`h-8 px-2 rounded-lg text-xs font-medium focus:outline-none transition-colors ${
-                            isDark ? "bg-[#11192e] border border-slate-700/40 text-white" : "bg-white border border-slate-200 text-slate-800"
+                          className={`h-9 px-3 rounded-xl text-xs font-medium focus:outline-none transition-colors ${
+                            isDark ? "bg-[#11192e] border border-slate-700/50 text-white focus:border-indigo-500" : "bg-white border border-slate-200 text-slate-800 focus:border-indigo-500"
                           }`}
                         />
                       </div>
 
                       <div className="flex flex-col gap-1">
-                        <label className="text-[10px] font-bold text-slate-400">Episode Download URL</label>
+                        <label className="text-[10px] font-bold text-slate-400">
+                          <span>Episode Download URL</span>
+                        </label>
                         <input
                           type="url"
-                          placeholder="https://example.com/s1e1_download.mp4"
+                          placeholder="https://example.com/ep1_download.mp4"
                           value={tempEpisodeDownloadUrl}
                           onChange={(e) => setTempEpisodeDownloadUrl(e.target.value)}
-                          className={`h-8 px-2 rounded-lg text-xs font-medium focus:outline-none transition-colors ${
-                            isDark ? "bg-[#11192e] border border-slate-700/40 text-white" : "bg-white border border-slate-200 text-slate-800"
+                          className={`h-9 px-3 rounded-xl text-xs font-medium focus:outline-none transition-colors ${
+                            isDark ? "bg-[#11192e] border border-slate-700/50 text-white focus:border-indigo-500" : "bg-white border border-slate-200 text-slate-800 focus:border-indigo-500"
                           }`}
                         />
                       </div>
@@ -4008,41 +4113,57 @@ export default function App() {
                       <button
                         type="button"
                         onClick={handleAddEpisodeToSeason}
-                        className="h-8 bg-indigo-600 hover:bg-indigo-500 text-white font-bold rounded-lg text-[11px] transition-all flex items-center justify-center gap-1 cursor-pointer"
+                        className="h-10 bg-indigo-600 hover:bg-indigo-500 text-white font-black rounded-xl text-xs transition-all flex items-center justify-center gap-1.5 cursor-pointer shadow-sm hover:scale-[1.01] active:scale-[0.99]"
                       >
-                        <Plus className="w-3.5 h-3.5" />
-                        Inject Episode
+                        <Plus className="w-4 h-4 text-white" />
+                        <span>Inject Episode</span>
                       </button>
 
-                      {/* Display added episodes */}
-                      <div className="mt-2">
-                        <span className="text-[10px] font-black uppercase text-slate-400 tracking-wider">
-                          Injected Episodes ({Object.values(customSeasons).reduce((acc: number, curr: any) => acc + Object.keys(curr || {}).length, 0)})
-                        </span>
+                      {/* Display added episodes list */}
+                      <div className="mt-2 flex flex-col gap-1.5">
+                        <div className="flex items-center justify-between">
+                          <span className="text-[10px] font-black uppercase text-slate-400 tracking-wider">
+                            Injected Episode List ({Object.values(customSeasons).reduce((acc: number, curr: any) => acc + Object.keys(curr || {}).length, 0)})
+                          </span>
+                          {Object.keys(customSeasons).length > 0 && (
+                            <button
+                              type="button"
+                              onClick={() => {
+                                if (confirm("Clear all episodes from this Series?")) {
+                                  setCustomSeasons({});
+                                }
+                              }}
+                              className="text-[9px] font-bold text-rose-500 hover:underline"
+                            >
+                              Clear All
+                            </button>
+                          )}
+                        </div>
                         
-                        <div className={`mt-1 max-h-44 overflow-y-auto rounded-lg border divide-y divide-slate-700/20 ${
-                          isDark ? "bg-[#11192e]/40 border-slate-700/30" : "bg-white border-slate-200"
+                        <div className={`max-h-44 overflow-y-auto rounded-xl border divide-y divide-slate-700/10 ${
+                          isDark ? "bg-[#11192e]/40 border-slate-700/30 text-slate-300" : "bg-white border-slate-200 text-slate-600"
                         }`}>
                           {Object.keys(customSeasons).length === 0 ? (
-                            <div className="p-3 text-[10px] text-center text-slate-500 font-medium">
-                              No specific episodes injected yet. Add above.
+                            <div className="p-4 text-[11px] text-center text-slate-500 font-bold flex flex-col items-center gap-1">
+                              <PlusCircle className="w-5 h-5 text-slate-600/40" />
+                              <span>No episodes injected yet. Fill the inputs above and click 'Inject Episode'.</span>
                             </div>
                           ) : (
                             Object.entries(customSeasons).flatMap(([sNum, eps]) =>
                               Object.entries(eps).map(([eNum, links]) => (
-                                <div key={`${sNum}-${eNum}`} className="p-2 flex items-center justify-between gap-2 text-[11px]">
-                                  <div className="flex flex-col">
-                                    <span className="font-bold text-indigo-400">Season {sNum}, Episode {eNum}</span>
-                                    <span className="text-[9px] text-slate-500 truncate max-w-[180px]" title={links.stream_url}>
-                                      Stream: {links.stream_url ? "Yes" : "No"} | Down: {links.download_url ? "Yes" : "No"}
+                                <div key={`${sNum}-${eNum}`} className="p-3 flex items-center justify-between gap-3 text-[11px] hover:bg-indigo-500/5 transition-colors">
+                                  <div className="flex flex-col gap-0.5">
+                                    <span className="font-extrabold text-indigo-400">Season {sNum} - Episode {eNum}</span>
+                                    <span className="text-[9px] text-slate-500 truncate max-w-[200px]" title={links.stream_url}>
+                                      Stream: {links.stream_url ? "Yes" : "No"} | Download: {links.download_url ? "Yes" : "No"}
                                     </span>
                                   </div>
                                   <button
                                     type="button"
                                     onClick={() => handleRemoveEpisodeFromSeason(sNum, eNum)}
-                                    className="p-1 rounded text-rose-500 hover:bg-rose-500/10"
+                                    className="p-1.5 rounded-lg text-rose-500 hover:bg-rose-500/10 transition-colors"
                                   >
-                                    <X className="w-3.5 h-3.5" />
+                                    <X className="w-4 h-4" />
                                   </button>
                                 </div>
                               ))
@@ -4060,7 +4181,11 @@ export default function App() {
                       className="flex-1 h-11 bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 text-white font-bold rounded-xl text-xs transition-all flex items-center justify-center gap-2 cursor-pointer shadow-md"
                     >
                       <Save className="w-4 h-4" />
-                      {linksSaving ? "Saving..." : linkEditingId ? "Update Injected URLs" : "Inject Media URLs"}
+                      {linksSaving 
+                        ? "Saving..." 
+                        : linkEditingId 
+                          ? "Update Injection" 
+                          : "Save Injection"}
                     </button>
 
                     {linkEditingId && (
@@ -4110,7 +4235,7 @@ export default function App() {
                         </p>
                       </div>
                     ) : (
-                      <div className="overflow-x-auto max-h-[460px]">
+                      <div className="overflow-x-auto max-h-[500px]">
                         <table className="w-full text-left text-xs">
                           <thead>
                             <tr className={`border-b text-[10px] font-black uppercase tracking-wider ${
@@ -4118,33 +4243,59 @@ export default function App() {
                             }`}>
                               <th className="py-3 px-4">TMDB ID</th>
                               <th className="py-3 px-4">Title / Name</th>
-                              <th className="py-3 px-4">Stream</th>
-                              <th className="py-3 px-4">Download</th>
+                              <th className="py-3 px-4">Type</th>
+                              <th className="py-3 px-4">Source Info</th>
                               <th className="py-3 px-4 text-right">Actions</th>
                             </tr>
                           </thead>
                           <tbody className="divide-y divide-slate-800/10">
                             {Object.entries(dramaLinks).map(([id, rawItem]) => {
-                              const item = rawItem as { stream_url: string | null; download_url: string | null; title?: string; seasons?: any };
+                              const item = rawItem as { stream_url: string | null; download_url: string | null; title?: string; seasons?: any; media_type?: string };
+                              const detectedType = item.media_type || (item.seasons && Object.keys(item.seasons).length > 0 ? "tv" : "movie");
+                              const isMovie = detectedType === "movie";
+                              
+                              // Count episodes
+                              let episodeCount = 0;
+                              if (item.seasons) {
+                                Object.values(item.seasons).forEach((eps: any) => {
+                                  episodeCount += Object.keys(eps || {}).length;
+                                });
+                              }
+
                               return (
                                 <tr key={id} className={`hover:bg-slate-500/5 transition-colors ${
                                   isDark ? "text-slate-200" : "text-slate-700"
                                 }`}>
                                   <td className="py-3 px-4 font-mono font-bold text-indigo-400 text-[11px]">{id}</td>
-                                  <td className="py-3 px-4 font-bold">{item.title || "Drama"}</td>
-                                  <td className="py-3 px-4 max-w-[120px] truncate" title={item.stream_url || "None"}>
-                                    {item.stream_url ? (
-                                      <span className="text-emerald-500 font-mono text-[10px] flex items-center gap-1">
-                                        <Play className="w-3 h-3 fill-emerald-500/20" /> Active Link
-                                      </span>
-                                    ) : <span className="text-slate-500 text-[10px]">None</span>}
+                                  <td className="py-3 px-4">
+                                    <div className="font-bold text-[12px]">{item.title || "Untitled Drama"}</div>
                                   </td>
-                                  <td className="py-3 px-4 max-w-[120px] truncate" title={item.download_url || "None"}>
-                                    {item.download_url ? (
-                                      <span className="text-indigo-400 font-mono text-[10px] flex items-center gap-1">
-                                        <Link className="w-3 h-3" /> Active Download
+                                  <td className="py-3 px-4">
+                                    {isMovie ? (
+                                      <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[10px] font-black uppercase tracking-wider bg-purple-500/10 text-purple-400 border border-purple-500/10">
+                                        <Film className="w-2.5 h-2.5" /> Movie
                                       </span>
-                                    ) : <span className="text-slate-500 text-[10px]">None</span>}
+                                    ) : (
+                                      <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[10px] font-black uppercase tracking-wider bg-blue-500/10 text-blue-400 border border-blue-500/10">
+                                        <Tv className="w-2.5 h-2.5" /> Series
+                                      </span>
+                                    )}
+                                  </td>
+                                  <td className="py-3 px-4">
+                                    {isMovie ? (
+                                      <div className="flex flex-col gap-0.5 text-[10px]">
+                                        <span className={item.stream_url ? "text-emerald-500" : "text-slate-500"}>
+                                          • Stream: {item.stream_url ? "Available" : "Missing"}
+                                        </span>
+                                        <span className={item.download_url ? "text-indigo-400" : "text-slate-500"}>
+                                          • Download: {item.download_url ? "Available" : "Missing"}
+                                        </span>
+                                      </div>
+                                    ) : (
+                                      <div className="flex flex-col gap-0.5 text-[10px] font-bold text-indigo-400">
+                                        <span>• {episodeCount} Custom Episodes Injected</span>
+                                      </div>
+                                    )}
                                   </td>
                                   <td className="py-3 px-4 text-right flex items-center justify-end gap-1.5">
                                     <button
@@ -4156,7 +4307,7 @@ export default function App() {
                                         setLinkDownloadUrl(item.download_url || "");
                                         setLinkEditingId(id);
                                         setCustomSeasons(item.seasons || {});
-                                        setLinkMediaType(item.seasons && Object.keys(item.seasons).length > 0 ? "tv" : "movie");
+                                        setLinkMediaType(detectedType as "movie" | "tv");
                                       }}
                                       className={`p-1.5 rounded-lg hover:text-indigo-500 transition-colors cursor-pointer ${
                                         isDark ? "bg-slate-800 hover:bg-slate-700 text-slate-400" : "bg-slate-100 hover:bg-slate-200 text-slate-500"
@@ -4165,19 +4316,20 @@ export default function App() {
                                     >
                                       <Pencil className="w-3.5 h-3.5" />
                                     </button>
-                                  <button
-                                    type="button"
-                                    onClick={() => handleDeleteDramaLink(id)}
-                                    className={`p-1.5 rounded-lg hover:text-rose-500 transition-colors cursor-pointer ${
-                                      isDark ? "bg-slate-800 hover:bg-slate-700 text-slate-400" : "bg-slate-100 hover:bg-slate-200 text-slate-500"
-                                    }`}
-                                    title="Delete Injections"
-                                  >
-                                    <Trash2 className="w-3.5 h-3.5" />
-                                  </button>
-                                </td>
-                              </tr>
-                            );})}
+                                    <button
+                                      type="button"
+                                      onClick={() => handleDeleteDramaLink(id)}
+                                      className={`p-1.5 rounded-lg hover:text-rose-500 transition-colors cursor-pointer ${
+                                        isDark ? "bg-slate-800 hover:bg-slate-700 text-slate-400" : "bg-slate-100 hover:bg-slate-200 text-slate-500"
+                                      }`}
+                                      title="Delete Injections"
+                                    >
+                                      <Trash2 className="w-3.5 h-3.5" />
+                                    </button>
+                                  </td>
+                                </tr>
+                              );
+                            })}
                           </tbody>
                         </table>
                       </div>
@@ -4196,9 +4348,29 @@ export default function App() {
             <div className={`rounded-2xl p-6 border transition-colors duration-300 ${
               isDark ? "bg-[#0c1224] border-[#1e2942]" : "bg-white border-slate-200"
             }`}>
-              <div className="flex items-center gap-2 text-indigo-500 font-black tracking-tight text-lg mb-2">
-                <Layers className="w-6 h-6 animate-pulse text-indigo-500" />
-                HanZone Home Layout Config Engine
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-2">
+                <div className="flex items-center gap-2 text-indigo-500 font-black tracking-tight text-lg">
+                  <Layers className="w-6 h-6 animate-pulse text-indigo-500" />
+                  HanZone Home Layout Config Engine
+                </div>
+                
+                <button
+                  type="button"
+                  onClick={() => {
+                    addLog("Manual Sync triggered: pulling freshest Home layout config from server...", "info");
+                    fetchHomeLayout();
+                  }}
+                  disabled={layoutLoading}
+                  className={`h-9 px-3.5 rounded-xl border flex items-center gap-1.5 text-xs font-bold transition-all duration-300 active:scale-[0.98] ${
+                    isDark 
+                      ? "bg-[#11192e] border-[#1e2942] hover:bg-[#1c294a] text-slate-200 disabled:opacity-50" 
+                      : "bg-white border-slate-200 hover:bg-slate-50 text-slate-700 shadow-sm disabled:opacity-50"
+                  }`}
+                  title="Force refresh Home layout configuration from server"
+                >
+                  <RefreshCw className={`w-3.5 h-3.5 ${layoutLoading ? "animate-spin text-indigo-500" : ""}`} />
+                  <span>Sync from Server</span>
+                </button>
               </div>
               <p className={`text-xs leading-relaxed max-w-2xl mb-6 transition-colors duration-300 ${isDark ? "text-slate-400" : "text-slate-500"}`}>
                 Design and manage the Android application home screen structure dynamically. Change section order, toggle visibility, and build custom mixed-country rails (e.g. merge KR & JP dramas) without redeploying the app.
@@ -4226,19 +4398,19 @@ export default function App() {
                     </h3>
 
                     <div className="flex flex-col gap-1">
-                      <label className="text-[11px] font-bold text-slate-400">Section Unique ID *</label>
+                      <label className="text-[11px] font-bold text-slate-400">Section Unique ID (Numeric ID) *</label>
                       <input
                         type="text"
                         required
                         disabled={!!layoutEditingId}
-                        placeholder="e.g. kr_dramas"
+                        placeholder="e.g. 8"
                         value={layoutSectionId}
                         onChange={(e) => setLayoutSectionId(e.target.value)}
                         className={`h-10 px-3 rounded-xl text-xs font-medium border focus:outline-none focus:border-indigo-500 transition-colors ${
                           isDark ? "bg-[#11192e] border-slate-700/50 text-slate-100" : "bg-white border-slate-200 text-slate-800"
                         }`}
                       />
-                      <span className="text-[9px] text-slate-500">Must be unique, with no spaces. e.g. `trending_actors`</span>
+                      <span className="text-[9px] text-slate-500">Must be a unique number (ID system). e.g. `8` or `9`</span>
                     </div>
 
                     <div className="flex flex-col gap-1">
@@ -4403,11 +4575,11 @@ export default function App() {
                         onClick={() => {
                           if (window.confirm("Initialize a Korean Drama focused layout preset?")) {
                             const krPreset = [
-                              { "section_id": "hero_banner", "layout_type": "HERO", "title": "Korean Spotlights", "visible": true },
-                              { "section_id": "top_10_kr", "layout_type": "TOP_10", "title": "Top 10 K-Dramas", "visible": true },
-                              { "section_id": "kr_romance", "layout_type": "DRAMA_RAIL", "title": "Romantic Comedies", "visible": true, "data_source": { "media_type": "tv", "countries": ["KR"], "sort_by": "popularity" } },
-                              { "section_id": "jp_cn_gems", "layout_type": "DRAMA_RAIL", "title": "Anime & Chinese Gems", "visible": true, "data_source": { "media_type": "all", "countries": ["JP", "CN"], "sort_by": "popularity" } },
-                              { "section_id": "trending_actors", "layout_type": "ACTORS", "title": "Hallyu Stars", "visible": true }
+                              { "section_id": "1", "layout_type": "HERO", "title": "Korean Spotlights", "visible": true },
+                              { "section_id": "2", "layout_type": "TOP_10", "title": "Top 10 K-Dramas", "visible": true },
+                              { "section_id": "3", "layout_type": "DRAMA_RAIL", "title": "Romantic Comedies", "visible": true, "data_source": { "media_type": "tv", "countries": ["KR"], "sort_by": "popularity" } },
+                              { "section_id": "4", "layout_type": "DRAMA_RAIL", "title": "Anime & Chinese Gems", "visible": true, "data_source": { "media_type": "all", "countries": ["JP", "CN"], "sort_by": "popularity" } },
+                              { "section_id": "5", "layout_type": "ACTORS", "title": "Hallyu Stars", "visible": true }
                             ];
                             saveLayoutConfig(krPreset);
                           }
