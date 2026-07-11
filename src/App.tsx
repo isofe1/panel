@@ -62,6 +62,7 @@ import {
 import { Genre, GitHubConfig, ChatMessage, LocalSnapshot, SystemStats, HeroConfig, PinnedItem } from "./types";
 import { kotlinTemplates } from "./codeTemplates";
 import { ApiDocumentation } from "./components/ApiDocumentation";
+import { HomeScreenDashboard } from "./components/HomeScreenDashboard";
 
 const BACKDROP_PRESETS = [
   { name: "Sci-Fi / Cyberpunk", url: "https://images.unsplash.com/photo-1506318137071-a8e063b4bec0?auto=format&fit=crop&q=80&w=1200" },
@@ -219,6 +220,7 @@ export default function App() {
   const [layoutLoading, setLayoutLoading] = useState<boolean>(false);
   const [layoutSaving, setLayoutSaving] = useState<boolean>(false);
   const [layoutMessage, setLayoutMessage] = useState<{ text: string; type: "success" | "error" } | null>(null);
+  const [layoutViewMode, setLayoutViewMode] = useState<"list" | "visual">("visual");
 
   // Form Inputs for Home Layout Section
   const [layoutEditingId, setLayoutEditingId] = useState<string | null>(null);
@@ -229,6 +231,44 @@ export default function App() {
   const [layoutMediaTypeInput, setLayoutMediaTypeInput] = useState<string>("all");
   const [layoutCountriesInput, setLayoutCountriesInput] = useState<string>("KR, JP");
   const [layoutSortByInput, setLayoutSortByInput] = useState<string>("popularity");
+
+  // Layout-specific Drag and Drop states and handlers
+  const [layoutDraggedIndex, setLayoutDraggedIndex] = useState<number | null>(null);
+  const [layoutDragOverIndex, setLayoutDragOverIndex] = useState<number | null>(null);
+
+  const handleLayoutDragStart = (e: React.DragEvent, index: number) => {
+    setLayoutDraggedIndex(index);
+    e.dataTransfer.effectAllowed = "move";
+  };
+
+  const handleLayoutDragOver = (e: React.DragEvent, index: number) => {
+    e.preventDefault();
+    if (layoutDraggedIndex !== index) {
+      setLayoutDragOverIndex(index);
+    }
+  };
+
+  const handleLayoutDragLeave = () => {
+    setLayoutDragOverIndex(null);
+  };
+
+  const handleLayoutDrop = async (e: React.DragEvent, targetIndex: number) => {
+    e.preventDefault();
+    if (layoutDraggedIndex !== null && layoutDraggedIndex !== targetIndex) {
+      const updated = [...homeLayout];
+      const [removed] = updated.splice(layoutDraggedIndex, 1);
+      updated.splice(targetIndex, 0, removed);
+      setHomeLayout(updated);
+      await saveLayoutConfig(updated);
+    }
+    setLayoutDraggedIndex(null);
+    setLayoutDragOverIndex(null);
+  };
+
+  const handleLayoutDragEnd = () => {
+    setLayoutDraggedIndex(null);
+    setLayoutDragOverIndex(null);
+  };
 
   // Drag and Drop states and handlers
   const [draggedPosition, setDraggedPosition] = useState<number | null>(null);
@@ -769,6 +809,34 @@ export default function App() {
     const updated = homeLayout.filter((sec) => sec.section_id !== sectionId);
     setHomeLayout(updated);
     await saveLayoutConfig(updated);
+  };
+
+  // Batch operations for home screen layout
+  const handleToggleAllVisibility = async () => {
+    if (homeLayout.length === 0) return;
+    const anyVisible = homeLayout.some((sec) => sec.visible !== false);
+    const updated = homeLayout.map((sec) => ({ ...sec, visible: !anyVisible }));
+    setHomeLayout(updated);
+    await saveLayoutConfig(updated);
+    addLog(`Batch: Set visibility of all sections to ${!anyVisible ? "Visible" : "Hidden"}`, "info");
+  };
+
+  const handleResetToDefaultSequence = async () => {
+    if (window.confirm("Restore all rails to default global hybrid layout? This will overwrite your current configuration.")) {
+      const success = await saveLayoutConfig(DEFAULT_HOME_LAYOUT);
+      if (success) {
+        addLog("Batch: Reset home screen rails to default sequence", "success");
+      }
+    }
+  };
+
+  const handleDeleteAllCustomSections = async () => {
+    if (window.confirm("⚠️ WARNING: Are you sure you want to delete ALL custom sections? Your home screen layout structure will be completely empty!")) {
+      const success = await saveLayoutConfig([]);
+      if (success) {
+        addLog("Batch: Cleared all home screen custom layout sections", "info");
+      }
+    }
   };
 
   // Save layout section from form (Add / Edit)
@@ -4345,449 +4413,37 @@ export default function App() {
         {/* HOME LAYOUT CONFIG SECTION */}
         {activeTab === "layout" && (
           <div className="flex-1 flex flex-col gap-6 overflow-y-auto pr-1 text-left animate-fade-in">
-            <div className={`rounded-2xl p-6 border transition-colors duration-300 ${
-              isDark ? "bg-[#0c1224] border-[#1e2942]" : "bg-white border-slate-200"
-            }`}>
-              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-2">
-                <div className="flex items-center gap-2 text-indigo-500 font-black tracking-tight text-lg">
-                  <Layers className="w-6 h-6 animate-pulse text-indigo-500" />
-                  HanZone Home Layout Config Engine
-                </div>
-                
-                <button
-                  type="button"
-                  onClick={() => {
-                    addLog("Manual Sync triggered: pulling freshest Home layout config from server...", "info");
-                    fetchHomeLayout();
-                  }}
-                  disabled={layoutLoading}
-                  className={`h-9 px-3.5 rounded-xl border flex items-center gap-1.5 text-xs font-bold transition-all duration-300 active:scale-[0.98] ${
-                    isDark 
-                      ? "bg-[#11192e] border-[#1e2942] hover:bg-[#1c294a] text-slate-200 disabled:opacity-50" 
-                      : "bg-white border-slate-200 hover:bg-slate-50 text-slate-700 shadow-sm disabled:opacity-50"
-                  }`}
-                  title="Force refresh Home layout configuration from server"
-                >
-                  <RefreshCw className={`w-3.5 h-3.5 ${layoutLoading ? "animate-spin text-indigo-500" : ""}`} />
-                  <span>Sync from Server</span>
-                </button>
-              </div>
-              <p className={`text-xs leading-relaxed max-w-2xl mb-6 transition-colors duration-300 ${isDark ? "text-slate-400" : "text-slate-500"}`}>
-                Design and manage the Android application home screen structure dynamically. Change section order, toggle visibility, and build custom mixed-country rails (e.g. merge KR & JP dramas) without redeploying the app.
-              </p>
-
-              {layoutMessage && (
-                <div className={`mb-6 p-3 rounded-xl text-xs font-semibold flex items-center gap-2 ${
-                  layoutMessage.type === "success" 
-                    ? "bg-emerald-500/10 text-emerald-400 border border-emerald-500/20" 
-                    : "bg-rose-500/10 text-rose-400 border border-rose-500/20"
-                }`}>
-                  {layoutMessage.type === "success" ? <CheckCircle className="w-4 h-4 shrink-0" /> : <AlertTriangle className="w-4 h-4 shrink-0" />}
-                  <span>{layoutMessage.text}</span>
-                </div>
-              )}
-
-              <div className="grid grid-cols-1 xl:grid-cols-12 gap-6">
-                {/* Editor Form Column */}
-                <div className="xl:col-span-4 flex flex-col gap-4">
-                  <form onSubmit={handleSaveSectionForm} className={`p-5 rounded-xl border flex flex-col gap-4 ${
-                    isDark ? "bg-[#070b14] border-[#1e2942]/60" : "bg-slate-50/50 border-slate-200"
-                  }`}>
-                    <h3 className={`text-xs font-black uppercase tracking-wider ${isDark ? "text-slate-300" : "text-slate-700"}`}>
-                      {layoutEditingId ? "✏️ Edit Layout Section" : "➕ Add Custom Section"}
-                    </h3>
-
-                    <div className="flex flex-col gap-1">
-                      <label className="text-[11px] font-bold text-slate-400">Section Unique ID (Numeric ID) *</label>
-                      <input
-                        type="text"
-                        required
-                        disabled={!!layoutEditingId}
-                        placeholder="e.g. 8"
-                        value={layoutSectionId}
-                        onChange={(e) => setLayoutSectionId(e.target.value)}
-                        className={`h-10 px-3 rounded-xl text-xs font-medium border focus:outline-none focus:border-indigo-500 transition-colors ${
-                          isDark ? "bg-[#11192e] border-slate-700/50 text-slate-100" : "bg-white border-slate-200 text-slate-800"
-                        }`}
-                      />
-                      <span className="text-[9px] text-slate-500">Must be a unique number (ID system). e.g. `8` or `9`</span>
-                    </div>
-
-                    <div className="flex flex-col gap-1">
-                      <label className="text-[11px] font-bold text-slate-400">Display Title (Human Readable) *</label>
-                      <input
-                        type="text"
-                        required
-                        placeholder="e.g. Romantic Korean Hits"
-                        value={layoutTitleInput}
-                        onChange={(e) => setLayoutTitleInput(e.target.value)}
-                        className={`h-10 px-3 rounded-xl text-xs font-medium border focus:outline-none focus:border-indigo-500 transition-colors ${
-                          isDark ? "bg-[#11192e] border-slate-700/50 text-slate-100" : "bg-white border-slate-200 text-slate-800"
-                        }`}
-                      />
-                    </div>
-
-                    <div className="flex flex-col gap-1">
-                      <label className="text-[11px] font-bold text-slate-400">Layout Style Type *</label>
-                      <select
-                        value={layoutTypeInput}
-                        onChange={(e) => setLayoutTypeInput(e.target.value)}
-                        className={`h-10 px-3 rounded-xl text-xs font-medium border focus:outline-none focus:border-indigo-500 transition-colors ${
-                          isDark ? "bg-[#11192e] border-slate-700/50 text-slate-100" : "bg-white border-slate-200 text-slate-800"
-                        }`}
-                      >
-                        <option value="HERO">HERO (Spotlight Banner)</option>
-                        <option value="TOP_10">TOP_10 (Ranked List)</option>
-                        <option value="DRAMA_RAIL">DRAMA_RAIL (Title Carousel)</option>
-                        <option value="ACTORS">ACTORS (Celebrity Profile Cards)</option>
-                      </select>
-                    </div>
-
-                    <div className="flex items-center gap-2 py-1">
-                      <input
-                        type="checkbox"
-                        id="visible_check"
-                        checked={layoutVisibleInput}
-                        onChange={(e) => setLayoutVisibleInput(e.target.checked)}
-                        className="w-4 h-4 rounded text-indigo-600 focus:ring-indigo-500"
-                      />
-                      <label htmlFor="visible_check" className="text-xs font-bold text-slate-400 cursor-pointer select-none">
-                        Visible on Android Client Home Screen
-                      </label>
-                    </div>
-
-                    {/* Data Source Details for DRAMA_RAIL */}
-                    {layoutTypeInput === "DRAMA_RAIL" && (
-                      <div className={`p-4 rounded-xl border flex flex-col gap-3 mt-1 ${
-                        isDark ? "bg-[#0c1224] border-slate-800/80" : "bg-white border-slate-100"
-                      }`}>
-                        <div className="text-[10px] font-black uppercase text-indigo-400 tracking-wider">
-                          🎯 Data Source Query Options
-                        </div>
-
-                        <div className="flex flex-col gap-1">
-                          <label className="text-[10px] font-bold text-slate-400">Media Type</label>
-                          <select
-                            value={layoutMediaTypeInput}
-                            onChange={(e) => setLayoutMediaTypeInput(e.target.value)}
-                            className={`h-8 px-2.5 rounded-lg text-xs font-medium border focus:outline-none focus:border-indigo-500 transition-colors ${
-                              isDark ? "bg-[#11192e] border-slate-700/50 text-slate-100" : "bg-slate-50 border-slate-200 text-slate-800"
-                            }`}
-                          >
-                            <option value="all">All (Movies & TV Series)</option>
-                            <option value="tv">TV Series Only</option>
-                            <option value="movie">Movies Only</option>
-                          </select>
-                        </div>
-
-                        <div className="flex flex-col gap-1">
-                          <label className="text-[10px] font-bold text-slate-400">Allowed Countries (Comma separated)</label>
-                          <input
-                            type="text"
-                            placeholder="KR, JP, CN"
-                            value={layoutCountriesInput}
-                            onChange={(e) => setLayoutCountriesInput(e.target.value)}
-                            className={`h-8 px-2.5 rounded-lg text-xs font-medium border focus:outline-none focus:border-indigo-500 transition-colors ${
-                              isDark ? "bg-[#11192e] border-slate-700/50 text-slate-100" : "bg-slate-50 border-slate-200 text-slate-800"
-                            }`}
-                          />
-                          <span className="text-[9px] text-slate-500">ISO Country codes, e.g. `KR`, `JP`, `CN`, `TW`</span>
-                        </div>
-
-                        <div className="flex flex-col gap-1">
-                          <label className="text-[10px] font-bold text-slate-400">Sort Field</label>
-                          <select
-                            value={layoutSortByInput}
-                            onChange={(e) => setLayoutSortByInput(e.target.value)}
-                            className={`h-8 px-2.5 rounded-lg text-xs font-medium border focus:outline-none focus:border-indigo-500 transition-colors ${
-                              isDark ? "bg-[#11192e] border-slate-700/50 text-slate-100" : "bg-slate-50 border-slate-200 text-slate-800"
-                            }`}
-                          >
-                            <option value="popularity">Popularity (Recommended)</option>
-                            <option value="rating">Viewer Rating</option>
-                            <option value="newest">Release Year / Newest</option>
-                          </select>
-                        </div>
-                      </div>
-                    )}
-
-                    <div className="flex items-center gap-2 mt-2">
-                      <button
-                        type="submit"
-                        disabled={layoutSaving}
-                        className="flex-1 h-11 bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 text-white font-bold rounded-xl text-xs transition-all flex items-center justify-center gap-2 cursor-pointer shadow-md"
-                      >
-                        <Save className="w-4 h-4" />
-                        {layoutSaving ? "Saving..." : layoutEditingId ? "Update Section" : "Add Section"}
-                      </button>
-
-                      {layoutEditingId && (
-                        <button
-                          type="button"
-                          onClick={() => {
-                            setLayoutSectionId("");
-                            setLayoutTitleInput("");
-                            setLayoutTypeInput("DRAMA_RAIL");
-                            setLayoutVisibleInput(true);
-                            setLayoutMediaTypeInput("all");
-                            setLayoutCountriesInput("KR, JP");
-                            setLayoutSortByInput("popularity");
-                            setLayoutEditingId(null);
-                          }}
-                          className={`px-4 h-11 text-xs font-bold rounded-xl transition-all cursor-pointer ${
-                            isDark ? "bg-slate-800 text-slate-300 hover:bg-slate-700" : "bg-slate-100 text-slate-600 hover:bg-slate-200"
-                          }`}
-                        >
-                          Cancel
-                        </button>
-                      )}
-                    </div>
-                  </form>
-
-                  {/* Preset Quick Actions */}
-                  <div className={`p-4 rounded-xl border flex flex-col gap-2.5 ${
-                    isDark ? "bg-[#070b14] border-[#1e2942]/60" : "bg-slate-50/50 border-slate-200"
-                  }`}>
-                    <h4 className={`text-[10px] font-black uppercase tracking-wider ${isDark ? "text-slate-400" : "text-slate-500"}`}>
-                      ⚡ Configuration Presets
-                    </h4>
-                    <p className="text-[10px] text-slate-500">Apply a pre-configured template instantly. (Warning: Overwrites current settings)</p>
-                    
-                    <div className="grid grid-cols-2 gap-2 mt-1">
-                      <button
-                        type="button"
-                        onClick={() => {
-                          if (window.confirm("Restore to default global hybrid layout?")) {
-                            saveLayoutConfig(DEFAULT_HOME_LAYOUT);
-                          }
-                        }}
-                        className={`py-2 px-2.5 rounded-lg text-[10px] font-bold text-center transition-colors cursor-pointer border ${
-                          isDark 
-                            ? "bg-indigo-950/20 border-indigo-500/20 text-indigo-400 hover:bg-indigo-950/40" 
-                            : "bg-indigo-50 border-indigo-100 text-indigo-600 hover:bg-indigo-100/80"
-                        }`}
-                      >
-                        Global Default
-                      </button>
-                      
-                      <button
-                        type="button"
-                        onClick={() => {
-                          if (window.confirm("Initialize a Korean Drama focused layout preset?")) {
-                            const krPreset = [
-                              { "section_id": "1", "layout_type": "HERO", "title": "Korean Spotlights", "visible": true },
-                              { "section_id": "2", "layout_type": "TOP_10", "title": "Top 10 K-Dramas", "visible": true },
-                              { "section_id": "3", "layout_type": "DRAMA_RAIL", "title": "Romantic Comedies", "visible": true, "data_source": { "media_type": "tv", "countries": ["KR"], "sort_by": "popularity" } },
-                              { "section_id": "4", "layout_type": "DRAMA_RAIL", "title": "Anime & Chinese Gems", "visible": true, "data_source": { "media_type": "all", "countries": ["JP", "CN"], "sort_by": "popularity" } },
-                              { "section_id": "5", "layout_type": "ACTORS", "title": "Hallyu Stars", "visible": true }
-                            ];
-                            saveLayoutConfig(krPreset);
-                          }
-                        }}
-                        className={`py-2 px-2.5 rounded-lg text-[10px] font-bold text-center transition-colors cursor-pointer border ${
-                          isDark 
-                            ? "bg-rose-950/20 border-rose-500/20 text-rose-400 hover:bg-rose-950/40" 
-                            : "bg-rose-50 border-rose-100 text-rose-600 hover:bg-rose-100/80"
-                        }`}
-                      >
-                        K-Drama Focus
-                      </button>
-                    </div>
-                  </div>
-                </div>
-
-                {/* Section Cards List Column */}
-                <div className="xl:col-span-8 flex flex-col gap-4">
-                  <div className="flex items-center justify-between">
-                    <h3 className={`text-xs font-black uppercase tracking-wider ${isDark ? "text-slate-300" : "text-slate-700"}`}>
-                      Home Screen Rails & Ordering ({homeLayout.length})
-                    </h3>
-                    <span className="text-[10px] text-slate-500">Android app loads these rails in top-to-bottom sequence</span>
-                  </div>
-
-                  {layoutLoading ? (
-                    <div className="p-16 flex flex-col items-center justify-center gap-2 border rounded-xl">
-                      <RefreshCw className="w-6 h-6 animate-spin text-indigo-500" />
-                      <span className="text-xs text-slate-400 font-medium">Loading layout config...</span>
-                    </div>
-                  ) : homeLayout.length === 0 ? (
-                    <div className="p-16 flex flex-col items-center justify-center gap-2 text-center border rounded-xl">
-                      <Layers className="w-8 h-8 text-slate-500 opacity-60" />
-                      <span className="text-xs font-bold text-slate-400">No layout sections found.</span>
-                      <button
-                        onClick={() => saveLayoutConfig(DEFAULT_HOME_LAYOUT)}
-                        className="mt-3 px-4 py-1.5 bg-indigo-600 hover:bg-indigo-500 text-white font-bold rounded-lg text-xs"
-                      >
-                        Initialize Default Layout
-                      </button>
-                    </div>
-                  ) : (
-                    <div className="flex flex-col gap-3">
-                      {homeLayout.map((section, idx) => {
-                        const isEdited = layoutEditingId === section.section_id;
-                        return (
-                          <div
-                            key={section.section_id}
-                            className={`p-4 rounded-xl border flex flex-col md:flex-row md:items-center justify-between gap-4 transition-all duration-300 ${
-                              isEdited
-                                ? "ring-2 ring-indigo-500 border-indigo-500"
-                                : !section.visible
-                                  ? isDark ? "bg-[#080d1a]/50 border-slate-800/40 opacity-60" : "bg-slate-100/50 border-slate-200 opacity-60"
-                                  : isDark ? "bg-[#070b14] border-[#1e2942]" : "bg-slate-50/50 border-slate-200"
-                            }`}
-                          >
-                            <div className="flex items-start gap-3">
-                              <div className={`p-2 rounded-xl text-xs font-black shrink-0 ${
-                                section.layout_type === "HERO"
-                                  ? "bg-rose-500/10 text-rose-400 border border-rose-500/20"
-                                  : section.layout_type === "TOP_10"
-                                    ? "bg-amber-500/10 text-amber-400 border border-amber-500/20"
-                                    : section.layout_type === "ACTORS"
-                                      ? "bg-teal-500/10 text-teal-400 border border-teal-500/20"
-                                      : "bg-indigo-500/10 text-indigo-400 border border-indigo-500/20"
-                              }`}>
-                                {section.layout_type}
-                              </div>
-
-                              <div className="flex flex-col text-left">
-                                <div className="flex items-center gap-1.5">
-                                  <span className={`text-xs font-extrabold ${isDark ? "text-slate-100" : "text-slate-800"}`}>
-                                    {section.title}
-                                  </span>
-                                  {!section.visible && (
-                                    <span className="text-[8px] font-black uppercase px-1.5 bg-rose-500/10 text-rose-400 rounded">
-                                      Hidden
-                                    </span>
-                                  )}
-                                </div>
-                                <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5 mt-1 text-[10px] text-slate-500 font-mono">
-                                  <span>ID: <strong className="text-slate-400">{section.section_id}</strong></span>
-                                  {section.layout_type === "DRAMA_RAIL" && section.data_source && (
-                                    <>
-                                      <span className="text-slate-700">•</span>
-                                      <span>Type: <strong className="text-slate-400">{section.data_source.media_type}</strong></span>
-                                      <span className="text-slate-700">•</span>
-                                      <span>Countries: <strong className="text-slate-400">[{section.data_source.countries?.join(", ") || "All"}]</strong></span>
-                                      <span className="text-slate-700">•</span>
-                                      <span>Sort: <strong className="text-slate-400">{section.data_source.sort_by}</strong></span>
-                                    </>
-                                  )}
-                                </div>
-                              </div>
-                            </div>
-
-                            {/* Position Ordering & Action Buttons */}
-                            <div className="flex items-center gap-2 shrink-0 md:self-center">
-                              {/* Move Controls */}
-                              <div className="flex items-center border rounded-lg overflow-hidden border-slate-700/20">
-                                <button
-                                  type="button"
-                                  disabled={idx === 0}
-                                  onClick={() => handleSectionOrderChange(idx, "up")}
-                                  className={`p-1.5 disabled:opacity-30 hover:text-indigo-500 transition-colors cursor-pointer ${
-                                    isDark ? "bg-slate-900 text-slate-400 hover:bg-slate-800" : "bg-white text-slate-500 hover:bg-slate-100"
-                                  }`}
-                                  title="Move Up"
-                                >
-                                  <ArrowUp className="w-3.5 h-3.5" />
-                                </button>
-                                <button
-                                  type="button"
-                                  disabled={idx === homeLayout.length - 1}
-                                  onClick={() => handleSectionOrderChange(idx, "down")}
-                                  className={`p-1.5 disabled:opacity-30 border-l border-slate-700/20 hover:text-indigo-500 transition-colors cursor-pointer ${
-                                    isDark ? "bg-slate-900 text-slate-400 hover:bg-slate-800" : "bg-white text-slate-500 hover:bg-slate-100"
-                                  }`}
-                                  title="Move Down"
-                                >
-                                  <ArrowDown className="w-3.5 h-3.5" />
-                                </button>
-                              </div>
-
-                              {/* Visibility Toggle */}
-                              <button
-                                type="button"
-                                onClick={() => handleToggleSectionVisibility(section.section_id)}
-                                className={`p-1.5 rounded-lg transition-colors cursor-pointer ${
-                                  !section.visible
-                                    ? "bg-rose-500/10 text-rose-400 hover:bg-rose-500/20"
-                                    : isDark
-                                      ? "bg-slate-900 text-slate-400 hover:bg-slate-800 hover:text-indigo-400"
-                                      : "bg-white text-slate-500 hover:bg-slate-100 hover:text-indigo-600"
-                                }`}
-                                title={section.visible ? "Hide on Client App" : "Show on Client App"}
-                              >
-                                <Eye className={`w-3.5 h-3.5 ${!section.visible ? "opacity-60" : ""}`} />
-                              </button>
-
-                              {/* Edit Section */}
-                              <button
-                                type="button"
-                                onClick={() => {
-                                  setLayoutSectionId(section.section_id);
-                                  setLayoutTitleInput(section.title || "");
-                                  setLayoutTypeInput(section.layout_type || "DRAMA_RAIL");
-                                  setLayoutVisibleInput(section.visible !== false);
-                                  if (section.data_source) {
-                                    setLayoutMediaTypeInput(section.data_source.media_type || "all");
-                                    setLayoutCountriesInput(section.data_source.countries?.join(", ") || "KR, JP");
-                                    setLayoutSortByInput(section.data_source.sort_by || "popularity");
-                                  } else {
-                                    setLayoutMediaTypeInput("all");
-                                    setLayoutCountriesInput("KR, JP");
-                                    setLayoutSortByInput("popularity");
-                                  }
-                                  setLayoutEditingId(section.section_id);
-                                }}
-                                className={`p-1.5 rounded-lg hover:text-indigo-500 transition-colors cursor-pointer ${
-                                  isDark ? "bg-slate-900 text-slate-400 hover:bg-slate-800" : "bg-white text-slate-500 hover:bg-slate-100"
-                                }`}
-                                title="Edit Configuration"
-                              >
-                                <Pencil className="w-3.5 h-3.5" />
-                              </button>
-
-                              {/* Delete Section */}
-                              <button
-                                type="button"
-                                onClick={() => handleDeleteSection(section.section_id)}
-                                className={`p-1.5 rounded-lg hover:text-rose-500 transition-colors cursor-pointer ${
-                                  isDark ? "bg-slate-900 text-slate-400 hover:bg-slate-800" : "bg-white text-slate-500 hover:bg-slate-100"
-                                }`}
-                                title="Delete Section"
-                              >
-                                <Trash2 className="w-3.5 h-3.5" />
-                              </button>
-                            </div>
-                          </div>
-                        );
-                      })}
-                    </div>
-                  )}
-
-                  {/* Dynamic JSON API Live Preview */}
-                  <div className={`mt-4 p-4 rounded-xl border flex flex-col gap-2.5 ${
-                    isDark ? "bg-[#070b14] border-[#1e2942]/60" : "bg-slate-50/50 border-slate-200"
-                  }`}>
-                    <div className="flex items-center justify-between">
-                      <h4 className={`text-[10px] font-black uppercase tracking-wider flex items-center gap-1.5 ${
-                        isDark ? "text-indigo-400" : "text-indigo-600"
-                      }`}>
-                        <Code className="w-3.5 h-3.5" />
-                        Live API JSON Response Payload Preview
-                      </h4>
-                      <span className="font-mono text-[9px] text-slate-500">GET /api/get-home-layout</span>
-                    </div>
-                    <pre className={`p-3 rounded-lg text-[10px] font-mono overflow-x-auto text-left leading-relaxed max-h-[180px] ${
-                      isDark ? "bg-[#05070e] text-indigo-300 border border-indigo-950/40" : "bg-white text-indigo-900 border border-slate-200"
-                    }`}>
-                      {JSON.stringify(homeLayout, null, 2)}
-                    </pre>
-                  </div>
-                </div>
-              </div>
-
-            </div>
+            <HomeScreenDashboard
+              isDark={isDark}
+              homeLayout={homeLayout}
+              setHomeLayout={setHomeLayout}
+              layoutLoading={layoutLoading}
+              layoutSaving={layoutSaving}
+              layoutMessage={layoutMessage}
+              setLayoutMessage={setLayoutMessage}
+              fetchHomeLayout={fetchHomeLayout}
+              saveLayoutConfig={saveLayoutConfig}
+              DEFAULT_HOME_LAYOUT={DEFAULT_HOME_LAYOUT}
+              handleToggleSectionVisibility={handleToggleSectionVisibility}
+              handleDeleteSection={handleDeleteSection}
+              handleSaveSectionForm={handleSaveSectionForm}
+              layoutEditingId={layoutEditingId}
+              setLayoutEditingId={setLayoutEditingId}
+              layoutSectionId={layoutSectionId}
+              setLayoutSectionId={setLayoutSectionId}
+              layoutTitleInput={layoutTitleInput}
+              setLayoutTitleInput={setLayoutTitleInput}
+              layoutTypeInput={layoutTypeInput}
+              setLayoutTypeInput={setLayoutTypeInput}
+              layoutVisibleInput={layoutVisibleInput}
+              setLayoutVisibleInput={setLayoutVisibleInput}
+              layoutMediaTypeInput={layoutMediaTypeInput}
+              setLayoutMediaTypeInput={setLayoutMediaTypeInput}
+              layoutCountriesInput={layoutCountriesInput}
+              setLayoutCountriesInput={setLayoutCountriesInput}
+              layoutSortByInput={layoutSortByInput}
+              setLayoutSortByInput={setLayoutSortByInput}
+            />
           </div>
         )}
 
